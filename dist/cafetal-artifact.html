@@ -1,0 +1,2862 @@
+<title>Cafetal</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a2418; }
+  body { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif; }
+  #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; image-rendering: pixelated; image-rendering: crisp-edges; }
+  #noscript { color: #f4e8d0; padding: 2rem; font-family: system-ui, sans-serif; }
+</style>
+<canvas id="game"></canvas>
+<noscript><div id="noscript">Cafetal needs JavaScript.</div></noscript>
+<script>
+/* Cafetal — 00_util.js
+   Shared namespace, math helpers, seeded RNG, colour helpers, easing. */
+(function () {
+  'use strict';
+  const C = (window.Cafetal = window.Cafetal || {});
+
+  // ---- constants ---------------------------------------------------------
+  C.TILE = 16;                 // world pixels per tile
+  C.MAP_W = 48;                // tiles
+  C.MAP_H = 36;
+  C.DAY_SECONDS = 360;         // real seconds per in-game day (6:00 -> 24:00)
+  C.DAY_START_HOUR = 6;
+  C.DAY_END_HOUR = 24;
+  C.SEASON_DAYS = 7;
+  C.SEASONS = ['spring', 'summer', 'autumn', 'winter'];
+  C.SAVE_KEY = 'cafetal.save.v1';
+  C.SETTINGS_KEY = 'cafetal.settings.v1';
+
+  // ---- math ---------------------------------------------------------------
+  const M = (C.math = {});
+  M.clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  M.lerp = (a, b, t) => a + (b - a) * t;
+  M.smooth = (t) => t * t * (3 - 2 * t);
+  M.easeOutBack = (t) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+  M.easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+  M.easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+  M.dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  M.wrap = (v, n) => ((v % n) + n) % n;
+  M.round = (v, n) => Math.round(v / n) * n;
+  M.fract = (v) => v - Math.floor(v);
+
+  // ---- seeded RNG (mulberry32) -------------------------------------------
+  C.rng = function (seed) {
+    let a = (seed >>> 0) || 0x9e3779b9;
+    const r = function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    r.int = (n) => Math.floor(r() * n);
+    r.range = (a, b) => a + r() * (b - a);
+    r.pick = (arr) => arr[Math.floor(r() * arr.length)];
+    r.chance = (p) => r() < p;
+    r.shuffle = (arr) => { for (let i = arr.length - 1; i > 0; i--) { const j = r.int(i + 1); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
+    return r;
+  };
+  C.hash2 = function (x, y, seed) {
+    let h = (x * 374761393 + y * 668265263 + (seed | 0) * 982451653) | 0;
+    h = (h ^ (h >>> 13)) * 1274126177;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  // 2D value noise for gentle terrain variation
+  C.noise2 = function (x, y, seed) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const a = C.hash2(xi, yi, seed), b = C.hash2(xi + 1, yi, seed);
+    const c = C.hash2(xi, yi + 1, seed), d = C.hash2(xi + 1, yi + 1, seed);
+    const u = M.smooth(xf), v = M.smooth(yf);
+    return M.lerp(M.lerp(a, b, u), M.lerp(c, d, u), v);
+  };
+
+  // ---- colours ------------------------------------------------------------
+  const Col = (C.color = {});
+  Col.hex = (r, g, b) => '#' + [r, g, b].map((v) => M.clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0')).join('');
+  Col.parse = (h) => { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map((c) => c + c).join(''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; };
+  Col.mix = (a, b, t) => { const A = Col.parse(a), B = Col.parse(b); return Col.hex(M.lerp(A[0], B[0], t), M.lerp(A[1], B[1], t), M.lerp(A[2], B[2], t)); };
+  Col.shade = (h, k) => { const [r, g, b] = Col.parse(h); return Col.hex(r * k, g * k, b * k); };
+  Col.lighten = (h, k) => Col.mix(h, '#ffffff', k);
+  Col.rgba = (h, a) => { const [r, g, b] = Col.parse(h); return `rgba(${r},${g},${b},${a})`; };
+  Col.hsl = (h, s, l) => `hsl(${h},${s}%,${l}%)`;
+
+  // ---- misc ---------------------------------------------------------------
+  C.pad2 = (n) => (n < 10 ? '0' + n : '' + n);
+  C.now = () => (window.performance ? performance.now() : Date.now());
+  C.canvas = function (w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  C.ctx2d = function (cv) { const x = cv.getContext('2d'); x.imageSmoothingEnabled = false; return x; };
+  C.uid = (() => { let n = 1; return () => n++; })();
+  C.deepClone = (o) => JSON.parse(JSON.stringify(o));
+  C.formatTime = function (hour) { // hour is fractional 0..24
+    let h = Math.floor(hour), m = Math.floor((hour - h) * 60);
+    m = Math.floor(m / 10) * 10;
+    const ampm = h >= 12 && h < 24 ? 'pm' : 'am';
+    let hh = h % 12; if (hh === 0) hh = 12;
+    return `${hh}:${C.pad2(m)} ${ampm}`;
+  };
+
+  // event bus
+  const listeners = {};
+  C.on = (ev, fn) => { (listeners[ev] = listeners[ev] || []).push(fn); };
+  C.emit = (ev, data) => { const l = listeners[ev]; if (l) for (const fn of l) fn(data); };
+})();
+
+</script>
+<script>
+/* Cafetal — 01_i18n.js
+   English / Spanish strings. C.t(key, vars) resolves in the active language. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+
+  const S = {
+    en: {
+      title: 'Cafetal',
+      tagline: 'a cozy coffee farm',
+      tap_to_start: 'Tap to begin',
+      continue_game: 'Continue',
+      new_game: 'New game',
+      new_game_confirm: 'Start over? Your farm will be erased.',
+      yes: 'Yes', no: 'No', ok: 'Okay', close: 'Close', back: 'Back',
+      coins: 'coins', day: 'Day', reputation: 'Reputation',
+      season_spring: 'Spring', season_summer: 'Summer', season_autumn: 'Autumn', season_winter: 'Winter',
+      weather_clear: 'Clear', weather_cloudy: 'Cloudy', weather_rain: 'Rain', weather_snow: 'Snow',
+      // tools
+      tool_hand: 'Hand', tool_hoe: 'Hoe', tool_water: 'Water', tool_bag: 'Bag',
+      // items
+      item_coffee_seed: 'Coffee seedling', item_tomato_seed: 'Tomato seeds', item_corn_seed: 'Corn seeds', item_sunflower_seed: 'Sunflower seeds',
+      item_cherry: 'Coffee cherries', item_parchment: 'Wet parchment', item_green: 'Green beans',
+      item_roast_light: 'Light roast', item_roast_medium: 'Medium roast', item_roast_dark: 'Dark roast',
+      item_tomato: 'Tomatoes', item_corn: 'Corn', item_sunflower: 'Sunflowers', item_egg: 'Eggs',
+      item_milk: 'Milk', item_panela: 'Panela', item_cinnamon: 'Cinnamon', item_cocoa: 'Cocoa', item_mint: 'Wild mint', item_flower: 'Wildflowers',
+      item_fish: 'Trout',
+      // drinks
+      drink_espresso: 'Espresso', drink_americano: 'Americano', drink_latte: 'Latte', drink_cappuccino: 'Cappuccino',
+      drink_cold_brew: 'Cold brew', drink_olla: 'Café de olla', drink_mocha: 'Mocha', drink_mint_tea: 'Mint tea',
+      // farming
+      hint_tap_move: 'Tap the ground to walk there.',
+      hint_hoe: 'Pick the hoe and tap soil near the house to till it.',
+      hint_seed: 'Pick a seed and tap tilled soil to plant.',
+      hint_water: 'Water your crops each morning. Rain does it for you.',
+      hint_coffee_done: 'When coffee cherries turn red (about 6 days), pick them with your hand.',
+      hint_pulper: 'Take cherries to the pulper by the shed.',
+      hint_patio: 'Spread parchment on the patio to dry. Two sunny days.',
+      hint_roaster: 'Roast green beans in the shed. Hold, then release at the right moment.',
+      hint_cafe: 'Customers wait at the counter on the road. Serve them!',
+      not_farmland: 'This ground is too rocky to till.',
+      no_seeds: 'No seeds of that kind.',
+      planted: 'Planted {name}.',
+      harvested: '+{n} {name}',
+      foraged: 'Found {name}!',
+      picked_egg: 'The hens left an egg.',
+      // stations
+      pulper: 'Pulper', patio: 'Drying patio', roaster: 'Roaster', cafe: 'Café counter', house: 'Home', shop: "Rosa's cart", pond: 'Pond', coop: 'Hen house',
+      pulper_none: 'No cherries to pulp.', pulper_done: 'Pulped {n} cherries into wet parchment.',
+      patio_status: 'Drying: {n} / {max}  ·  {days} sunny day(s) left', patio_empty: 'The patio is empty.',
+      patio_loaded: 'Spread {n} parchment to dry.', patio_collect: 'Collected {n} green beans!', patio_rain: 'Rain! Drying is paused today.',
+      patio_full: 'The patio is full.',
+      roaster_title: 'Roasting', roaster_choose: 'Choose a roast', roaster_none: 'No green beans to roast.',
+      roaster_hold: 'HOLD to roast', roaster_release: 'RELEASE in the target', roaster_batch: 'Batch: {n} beans',
+      roast_light: 'Light', roast_medium: 'Medium', roast_dark: 'Dark',
+      roast_perfect: 'Perfect roast! +{n} beans', roast_good: 'Nice roast. +{n} beans', roast_burnt: 'Burnt... +{n} beans (a few survived)', roast_under: 'Under-roasted... +{n} beans',
+      // cafe
+      order_wants: 'wants a {drink}', serve: 'Serve', sorry: 'Sorry, not today', missing: 'Need: {list}',
+      served: '+{coins} coins', tip: 'tip', recipe: 'Recipe',
+      customers_today: 'Customers today', earned: 'Earned', happy: 'Happy customers',
+      // shop
+      buy: 'Buy', sell: 'Sell', seeds: 'Seeds', pantry: 'Pantry', upgrades: 'Upgrades', owned: 'Owned', not_enough: 'Not enough coins.',
+      sell_all: 'Sell all',
+      up_sprinkler: 'Sprinkler', up_sprinkler_d: 'Waters the whole field each morning.',
+      up_roof: 'Patio roof', up_roof_d: 'Drying continues even when it rains.',
+      up_patio2: 'Bigger patio', up_patio2_d: 'Dry 40 parchment at once.',
+      up_roaster2: 'Drum roaster', up_roaster2_d: 'Roast 20 beans per batch.',
+      up_cat: 'Adopt a cat', up_cat_d: 'A grey cat naps on the porch. Good luck follows.',
+      up_lights: 'Fairy lights', up_lights_d: 'Warm lights along the café. Customers linger longer.',
+      up_bench: 'Garden bench', up_bench_d: 'A place to sit and watch the rain.',
+      up_hens: 'Hens', up_hens_d: 'Three hens roam the yard and leave eggs.',
+      up_rod: 'Fishing rod', up_rod_d: 'Tap the pond to fish. Trout sell well.',
+      // house / sleep
+      sleep_q: 'Go to sleep?', sleep_summary: 'Day {day} · {season}', good_morning: 'Good morning.',
+      forecast_rain: 'Rain expected tomorrow.', forecast_clear: 'Clear skies tomorrow.', forecast_snow: 'Snow tomorrow.',
+      midnight: "It's late. You fall asleep on the porch...",
+      // settings
+      settings: 'Settings', language: 'Language', music: 'Music', sound: 'Sound', on: 'On', off: 'Off',
+      // story letters
+      letter_1: "Dear you,\n\nThe farm is yours now. The coffee trees your grandfather planted are gone, but the soil remembers. Start small. Tomatoes pay the bills while the coffee grows.\n\nRosa keeps a cart on the road; she'll sell you seeds.\n\n— Abuela",
+      letter_2: "The village is talking about your café. Old Tomás says it's the first decent espresso since your grandfather's time.\n\nKeep going.\n\n— Abuela",
+      letter_3: "They asked me for your recipe at the market. I told them it's the mountain, the rain, and a little patience.\n\nI'm proud of you.\n\n— Abuela",
+      letter_4: "I'll visit this summer. Save me a cup of café de olla, the way your grandfather made it.\n\n— Abuela",
+      // fishing
+      fish_wait: 'Wait for a tug...', fish_now: 'NOW!', fish_caught: 'Caught a trout!', fish_missed: 'It got away.',
+      // misc
+      inventory: 'Bag', empty_bag: 'Your bag is empty.', fullscreen: 'Add to Home Screen for fullscreen', paused: 'Paused',
+      tutorial_done: 'You know the basics now. Take it slow.',
+      rep_up: 'Reputation grew!',
+      unlock_recipe: 'New recipe: {drink}',
+    },
+    es: {
+      title: 'Cafetal',
+      tagline: 'una finca de café tranquila',
+      tap_to_start: 'Toca para empezar',
+      continue_game: 'Continuar',
+      new_game: 'Nueva partida',
+      new_game_confirm: '¿Empezar de nuevo? Tu finca se borrará.',
+      yes: 'Sí', no: 'No', ok: 'Vale', close: 'Cerrar', back: 'Atrás',
+      coins: 'monedas', day: 'Día', reputation: 'Reputación',
+      season_spring: 'Primavera', season_summer: 'Verano', season_autumn: 'Otoño', season_winter: 'Invierno',
+      weather_clear: 'Despejado', weather_cloudy: 'Nublado', weather_rain: 'Lluvia', weather_snow: 'Nieve',
+      tool_hand: 'Mano', tool_hoe: 'Azadón', tool_water: 'Regar', tool_bag: 'Bolsa',
+      item_coffee_seed: 'Plántula de café', item_tomato_seed: 'Semillas de tomate', item_corn_seed: 'Semillas de maíz', item_sunflower_seed: 'Semillas de girasol',
+      item_cherry: 'Cerezas de café', item_parchment: 'Pergamino húmedo', item_green: 'Café verde',
+      item_roast_light: 'Tueste claro', item_roast_medium: 'Tueste medio', item_roast_dark: 'Tueste oscuro',
+      item_tomato: 'Tomates', item_corn: 'Maíz', item_sunflower: 'Girasoles', item_egg: 'Huevos',
+      item_milk: 'Leche', item_panela: 'Panela', item_cinnamon: 'Canela', item_cocoa: 'Cacao', item_mint: 'Yerbabuena', item_flower: 'Flores silvestres',
+      item_fish: 'Trucha',
+      drink_espresso: 'Espresso', drink_americano: 'Americano', drink_latte: 'Latte', drink_cappuccino: 'Capuchino',
+      drink_cold_brew: 'Cold brew', drink_olla: 'Café de olla', drink_mocha: 'Moca', drink_mint_tea: 'Té de yerbabuena',
+      hint_tap_move: 'Toca el suelo para caminar.',
+      hint_hoe: 'Elige el azadón y toca la tierra junto a la casa para ararla.',
+      hint_seed: 'Elige una semilla y toca la tierra arada para sembrar.',
+      hint_water: 'Riega tus cultivos cada mañana. La lluvia lo hace por ti.',
+      hint_coffee_done: 'Cuando las cerezas de café se pongan rojas (unos 6 días), recógelas con la mano.',
+      hint_pulper: 'Lleva las cerezas a la despulpadora junto al cobertizo.',
+      hint_patio: 'Extiende el pergamino en el patio para secarlo. Dos días de sol.',
+      hint_roaster: 'Tuesta el café verde en el cobertizo. Mantén pulsado y suelta en el momento justo.',
+      hint_cafe: 'Los clientes esperan en el mostrador del camino. ¡Atiéndelos!',
+      not_farmland: 'Este suelo es demasiado pedregoso.',
+      no_seeds: 'No tienes semillas de ese tipo.',
+      planted: 'Sembraste {name}.',
+      harvested: '+{n} {name}',
+      foraged: '¡Encontraste {name}!',
+      picked_egg: 'Las gallinas dejaron un huevo.',
+      pulper: 'Despulpadora', patio: 'Patio de secado', roaster: 'Tostadora', cafe: 'Mostrador', house: 'Casa', shop: 'Carreta de Rosa', pond: 'Estanque', coop: 'Gallinero',
+      pulper_none: 'No hay cerezas que despulpar.', pulper_done: 'Despulpaste {n} cerezas en pergamino húmedo.',
+      patio_status: 'Secando: {n} / {max}  ·  {days} día(s) de sol', patio_empty: 'El patio está vacío.',
+      patio_loaded: 'Extendiste {n} pergamino a secar.', patio_collect: '¡Recogiste {n} de café verde!', patio_rain: '¡Lluvia! El secado se pausa hoy.',
+      patio_full: 'El patio está lleno.',
+      roaster_title: 'Tostando', roaster_choose: 'Elige un tueste', roaster_none: 'No hay café verde para tostar.',
+      roaster_hold: 'MANTÉN para tostar', roaster_release: 'SUELTA en la zona', roaster_batch: 'Lote: {n} granos',
+      roast_light: 'Claro', roast_medium: 'Medio', roast_dark: 'Oscuro',
+      roast_perfect: '¡Tueste perfecto! +{n} granos', roast_good: 'Buen tueste. +{n} granos', roast_burnt: 'Quemado... +{n} granos (se salvaron algunos)', roast_under: 'Le faltó tueste... +{n} granos',
+      order_wants: 'quiere un {drink}', serve: 'Servir', sorry: 'Hoy no puedo', missing: 'Falta: {list}',
+      served: '+{coins} monedas', tip: 'propina', recipe: 'Receta',
+      customers_today: 'Clientes hoy', earned: 'Ganaste', happy: 'Clientes felices',
+      buy: 'Comprar', sell: 'Vender', seeds: 'Semillas', pantry: 'Despensa', upgrades: 'Mejoras', owned: 'Tuyo', not_enough: 'No alcanza.',
+      sell_all: 'Vender todo',
+      up_sprinkler: 'Aspersor', up_sprinkler_d: 'Riega todo el campo cada mañana.',
+      up_roof: 'Techo del patio', up_roof_d: 'El secado continúa aunque llueva.',
+      up_patio2: 'Patio grande', up_patio2_d: 'Seca 40 pergaminos a la vez.',
+      up_roaster2: 'Tostadora de tambor', up_roaster2_d: 'Tuesta 20 granos por lote.',
+      up_cat: 'Adoptar un gato', up_cat_d: 'Un gato gris duerme en el porche. Trae suerte.',
+      up_lights: 'Luces de colores', up_lights_d: 'Luces cálidas en el café. Los clientes se quedan más.',
+      up_bench: 'Banca de jardín', up_bench_d: 'Un lugar para sentarse a ver la lluvia.',
+      up_hens: 'Gallinas', up_hens_d: 'Tres gallinas pasean por el patio y dejan huevos.',
+      up_rod: 'Caña de pescar', up_rod_d: 'Toca el estanque para pescar. La trucha se vende bien.',
+      sleep_q: '¿Dormir?', sleep_summary: 'Día {day} · {season}', good_morning: 'Buenos días.',
+      forecast_rain: 'Mañana lloverá.', forecast_clear: 'Mañana estará despejado.', forecast_snow: 'Mañana nevará.',
+      midnight: 'Es tarde. Te quedas dormido en el porche...',
+      settings: 'Ajustes', language: 'Idioma', music: 'Música', sound: 'Sonido', on: 'Sí', off: 'No',
+      letter_1: 'Querido nieto,\n\nLa finca es tuya. Los cafetos que sembró tu abuelo ya no están, pero la tierra recuerda. Empieza poco a poco. Los tomates pagan las cuentas mientras crece el café.\n\nRosa tiene una carreta en el camino; te venderá semillas.\n\n— Abuela',
+      letter_2: 'En el pueblo hablan de tu café. Don Tomás dice que es el primer espresso decente desde los tiempos de tu abuelo.\n\nSigue así.\n\n— Abuela',
+      letter_3: 'Me pidieron tu receta en el mercado. Les dije que es la montaña, la lluvia y un poco de paciencia.\n\nEstoy orgullosa de ti.\n\n— Abuela',
+      letter_4: 'Este verano voy a visitarte. Guárdame una taza de café de olla, como lo hacía tu abuelo.\n\n— Abuela',
+      fish_wait: 'Espera el tirón...', fish_now: '¡AHORA!', fish_caught: '¡Pescaste una trucha!', fish_missed: 'Se escapó.',
+      inventory: 'Bolsa', empty_bag: 'Tu bolsa está vacía.', fullscreen: 'Añade a la pantalla de inicio para pantalla completa', paused: 'Pausa',
+      tutorial_done: 'Ya sabes lo básico. Tómatelo con calma.',
+      rep_up: '¡Tu reputación creció!',
+      unlock_recipe: 'Nueva receta: {drink}',
+    },
+  };
+
+  C.strings = S;
+  C.lang = 'en';
+  C.setLang = function (l) { C.lang = S[l] ? l : 'en'; };
+  C.t = function (key, vars) {
+    let s = (S[C.lang] && S[C.lang][key]) || S.en[key] || key;
+    if (vars) for (const k in vars) s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]);
+    return s;
+  };
+
+  // NPC dialogue: [en, es]
+  C.NPC_LINES = {
+    generic_order: [
+      ['Morning! Could I get a {drink}?', '¡Buenas! ¿Me das un {drink}?'],
+      ['One {drink}, please. No rush.', 'Un {drink}, por favor. Sin prisa.'],
+      ['Smells amazing out here. A {drink}?', 'Qué bien huele. ¿Un {drink}?'],
+      ['I walked all the way from the village for a {drink}.', 'Vine caminando desde el pueblo por un {drink}.'],
+    ],
+    thanks: [
+      ['Perfect. Just perfect.', 'Perfecto. Simplemente perfecto.'],
+      ['Ahh. That hits the spot.', 'Ahh. Justo lo que necesitaba.'],
+      ['Your grandfather would be proud.', 'Tu abuelo estaría orgulloso.'],
+      ['I\'ll tell everyone about this place.', 'Le voy a contar a todos de este lugar.'],
+      ['Worth the walk.', 'Valió la pena la caminata.'],
+    ],
+    sorry: [
+      ['No worries. I\'ll come back.', 'No pasa nada. Vuelvo otro día.'],
+      ['Another time, then.', 'Otro día será.'],
+    ],
+    tired: [
+      ['Maybe next time...', 'Quizá la próxima...'],
+    ],
+  };
+
+  C.NPC_DEFS = [
+    { id: 'tomas', name: 'Don Tomás', skin: '#c68b5a', hair: '#dcdcdc', shirt: '#4a6b8a', pants: '#3a3a4a', hat: '#e9d8a6', fav: 'espresso',
+      lines: [['I planted trees with your grandfather. Same rain, same hills.', 'Sembré cafetos con tu abuelo. La misma lluvia, las mismas lomas.'], ['Dark roast. Always dark.', 'Tueste oscuro. Siempre oscuro.']] },
+    { id: 'lucia', name: 'Lucía', skin: '#e8b898', hair: '#3a2418', shirt: '#d96c8a', pants: '#5a4a7a', hat: null, fav: 'latte',
+      lines: [['I teach at the school. The kids ask if you have a cat.', 'Doy clases en la escuela. Los niños preguntan si tienes gato.'], ['Latte, extra foam if you can.', 'Latte, con mucha espuma si se puede.']] },
+    { id: 'mateo', name: 'Mateo', skin: '#8a5a3a', hair: '#1a1a1a', shirt: '#6a9a5a', pants: '#2a3a5a', hat: '#5a7a3a', fav: 'americano',
+      lines: [['Fixed the bridge this morning. Long day.', 'Arreglé el puente esta mañana. Día largo.'], ['Just black coffee. Big cup.', 'Café negro nomás. Taza grande.']] },
+    { id: 'abril', name: 'Abril', skin: '#f0c8a8', hair: '#c85a2a', shirt: '#f0e0a0', pants: '#8a4a3a', hat: null, fav: 'cold_brew',
+      lines: [['I paint the pond every summer. It\'s never the same twice.', 'Pinto el estanque cada verano. Nunca es igual.'], ['Something cold. It\'s so warm today.', 'Algo frío. Hace tanto calor hoy.']] },
+    { id: 'elena', name: 'Doña Elena', skin: '#d8a888', hair: '#8a8a9a', shirt: '#7a3a6a', pants: '#3a2a3a', hat: null, fav: 'olla',
+      lines: [['Café de olla with panela, like my mother made.', 'Café de olla con panela, como lo hacía mi madre.'], ['You\'ve got the touch, mijo.', 'Tienes mano, mijo.']] },
+    { id: 'nico', name: 'Nico', skin: '#b87a5a', hair: '#4a3a2a', shirt: '#3a8a9a', pants: '#2a2a2a', hat: '#2a2a2a', fav: 'mocha',
+      lines: [['I deliver mail on the mountain road. Your letters come through me.', 'Reparto el correo del camino. Tus cartas pasan por mí.'], ['Mocha. Don\'t judge.', 'Moca. No juzgues.']] },
+    { id: 'sofia', name: 'Sofía', skin: '#e8c0a0', hair: '#f0d070', shirt: '#a0c0f0', pants: '#4a5a8a', hat: '#f0f0f0', fav: 'cappuccino',
+      lines: [['Studying in the city. I come home on weekends for this.', 'Estudio en la ciudad. Vengo los fines de semana por esto.'], ['Cappuccino, and your wifi password. Kidding.', 'Capuchino, y la clave del wifi. Es broma.']] },
+    { id: 'rafa', name: 'Rafa', skin: '#a86a4a', hair: '#2a2a2a', shirt: '#c0c0c0', pants: '#5a5a5a', hat: null, fav: 'mint_tea',
+      lines: [['I don\'t even drink coffee. The mint tea though...', 'Ni siquiera tomo café. Pero el té de yerbabuena...'], ['Quiet up here. I like it.', 'Qué tranquilo es esto. Me gusta.']] },
+  ];
+  C.npcLine = (pair) => (C.lang === 'es' ? pair[1] : pair[0]);
+})();
+
+</script>
+<script>
+/* Cafetal — 10_sprites.js
+   Procedural pixel art. Nothing is loaded from disk: every tile, character,
+   crop, building, animal and icon is drawn into an offscreen canvas at startup. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp, lerp } = C.math;
+  const Col = C.color;
+  const T = C.TILE;
+
+  // ---- tiny pixel drawing kit --------------------------------------------
+  function sprite(w, h, fn) {
+    const cv = C.canvas(w, h);
+    const g = C.ctx2d(cv);
+    const P = {
+      w, h, g, cv,
+      px(x, y, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, 1, 1); },
+      rect(x, y, w, h, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, w | 0, h | 0); },
+      hline(x, y, w, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, w | 0, 1); },
+      vline(x, y, h, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, 1, h | 0); },
+      disc(cx, cy, r, c) {
+        g.fillStyle = c;
+        for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+          for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+            const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+            if (dx * dx + dy * dy <= r * r) g.fillRect(x, y, 1, 1);
+          }
+      },
+      ellipse(cx, cy, rx, ry, c) {
+        g.fillStyle = c;
+        for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++)
+          for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
+            const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+            if (dx * dx + dy * dy <= 1) g.fillRect(x, y, 1, 1);
+          }
+      },
+      line(x0, y0, x1, y1, c) {
+        g.fillStyle = c;
+        x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
+        const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+        let err = dx + dy;
+        for (;;) {
+          g.fillRect(x0, y0, 1, 1);
+          if (x0 === x1 && y0 === y1) break;
+          const e2 = 2 * err;
+          if (e2 >= dy) { err += dy; x0 += sx; }
+          if (e2 <= dx) { err += dx; y0 += sy; }
+        }
+      },
+      blit(img, x, y) { g.drawImage(img, x | 0, y | 0); },
+      outline(c) { // 1px outline around all opaque pixels
+        const id = g.getImageData(0, 0, w, h), d = id.data, out = [];
+        const solid = (x, y) => x >= 0 && y >= 0 && x < w && y < h && d[(y * w + x) * 4 + 3] > 0;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          if (solid(x, y)) continue;
+          if (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1)) out.push([x, y]);
+        }
+        g.fillStyle = c; for (const [x, y] of out) g.fillRect(x, y, 1, 1);
+      },
+    };
+    fn(P, g);
+    return cv;
+  }
+  C.sprite = sprite;
+
+  const SP = (C.sprites = {});
+  const cache = new Map();
+  function memo(key, fn) { if (!cache.has(key)) cache.set(key, fn()); return cache.get(key); }
+  SP.memo = memo;
+
+  // ---- palettes -----------------------------------------------------------
+  SP.season = {
+    spring: { grass: ['#6db150', '#63a848', '#73b858'], grassDark: '#4f8c3a', leaf: ['#5da84a', '#7cc45c', '#4b9139'], blossom: '#f4b6d0', dirt: '#b08a5a' },
+    summer: { grass: ['#5fa845', '#57a03e', '#66b04c'], grassDark: '#47843a', leaf: ['#3f8f3a', '#5aa64a', '#2f7a30'], blossom: null, dirt: '#b08a5a' },
+    autumn: { grass: ['#9fa84a', '#97a044', '#a8b052'], grassDark: '#7a8438', leaf: ['#d08a3a', '#c86a3a', '#e0a840'], blossom: null, dirt: '#a8825a' },
+    winter: { grass: ['#dfe6e8', '#d6dee0', '#e6ecee'], grassDark: '#b8c4c8', leaf: ['#8a9a8a', '#a8b8a8', '#7a8a7a'], blossom: '#ffffff', dirt: '#9a8a7a' },
+  };
+
+  // ---- ground tiles ---------------------------------------------------------
+  // returns {grass:[cv..], dirt:[cv..], soil, soilWet, water:[frames], sand, wood, stone, concrete, snow}
+  SP.tiles = function (season) {
+    return memo('tiles:' + season, () => {
+      const pal = SP.season[season];
+      const t = {};
+      t.grass = [0, 1, 2, 3].map((v) => sprite(T, T, (P) => {
+        const r = C.rng(100 + v);
+        P.rect(0, 0, T, T, pal.grass[0]);
+        for (let i = 0; i < 26; i++) P.px(r.int(T), r.int(T), pal.grass[1 + r.int(2)]);
+        for (let i = 0; i < 4 + v; i++) { const x = r.int(T), y = r.int(T - 2); P.vline(x, y, 2, pal.grassDark); }
+        if (season === 'spring' && v === 3) { P.px(r.int(T), r.int(T), '#fff'); P.px(r.int(T), r.int(T), '#f8e070'); }
+        if (season === 'autumn' && v >= 2) { P.px(r.int(T), r.int(T), '#d08a3a'); }
+      }));
+      t.dirt = [0, 1, 2].map((v) => sprite(T, T, (P) => {
+        const r = C.rng(200 + v);
+        P.rect(0, 0, T, T, pal.dirt);
+        for (let i = 0; i < 18; i++) P.px(r.int(T), r.int(T), Col.shade(pal.dirt, 0.9));
+        for (let i = 0; i < 6; i++) P.px(r.int(T), r.int(T), Col.lighten(pal.dirt, 0.15));
+        if (season === 'winter') for (let i = 0; i < 10; i++) P.px(r.int(T), r.int(T), '#eef2f4');
+      }));
+      t.soil = sprite(T, T, (P) => {
+        const r = C.rng(300);
+        P.rect(0, 0, T, T, '#7a5232');
+        for (let y = 1; y < T; y += 4) P.hline(0, y, T, '#6a4428');
+        for (let i = 0; i < 12; i++) P.px(r.int(T), r.int(T), '#8a6040');
+      });
+      t.soilWet = sprite(T, T, (P) => {
+        const r = C.rng(301);
+        P.rect(0, 0, T, T, '#4e3420');
+        for (let y = 1; y < T; y += 4) P.hline(0, y, T, '#432c1a');
+        for (let i = 0; i < 10; i++) P.px(r.int(T), r.int(T), '#5c3e28');
+      });
+      t.water = [0, 1, 2, 3].map((f) => sprite(T, T, (P) => {
+        const base = season === 'winter' ? '#6a9ab8' : '#4a8fc0';
+        P.rect(0, 0, T, T, base);
+        const r = C.rng(400);
+        for (let i = 0; i < 5; i++) {
+          const x = (r.int(T) + f * 2) % T, y = (r.int(T) + f) % T;
+          P.hline(x, y, 3, Col.lighten(base, 0.25)); P.px(x + 1, y, Col.lighten(base, 0.45));
+        }
+        for (let i = 0; i < 4; i++) P.px(r.int(T), r.int(T), Col.shade(base, 0.85));
+      }));
+      t.sand = sprite(T, T, (P) => { const r = C.rng(500); P.rect(0, 0, T, T, '#d8c48a'); for (let i = 0; i < 14; i++) P.px(r.int(T), r.int(T), '#c8b47a'); });
+      t.wood = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#a8784a'); for (let y = 0; y < T; y += 4) P.hline(0, y, T, '#8a5e38'); P.px(3, 2, '#6a4a2a'); P.px(11, 10, '#6a4a2a'); });
+      t.stone = sprite(T, T, (P) => { const r = C.rng(600); P.rect(0, 0, T, T, '#9a9a94'); P.hline(0, 7, T, '#7a7a74'); P.vline(7, 0, 8, '#7a7a74'); P.vline(3, 8, 8, '#7a7a74'); P.vline(12, 8, 8, '#7a7a74'); for (let i = 0; i < 6; i++) P.px(r.int(T), r.int(T), '#aaaaa4'); });
+      t.concrete = sprite(T, T, (P) => { const r = C.rng(700); P.rect(0, 0, T, T, '#c9c2b4'); for (let i = 0; i < 12; i++) P.px(r.int(T), r.int(T), '#bcb5a6'); P.hline(0, 0, T, '#b0a898'); P.vline(0, 0, T, '#b0a898'); });
+      t.porch = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#b98a5a'); for (let x = 0; x < T; x += 4) P.vline(x, 0, T, '#9a6e44'); });
+      t.puddle = sprite(T, T, (P) => { P.ellipse(8, 8, 6, 4, 'rgba(90,140,200,0.55)'); P.ellipse(7, 7, 3, 1.5, 'rgba(200,230,255,0.35)'); });
+      return t;
+    });
+  };
+
+  // ---- humanoid characters ------------------------------------------------
+  // cfg: {skin,hair,shirt,pants,hat,shoes}, dir: 0 down 1 left 2 right 3 up, frame: 0..2 (0 idle)
+  SP.humanoid = function (cfg, dir, frame) {
+    const key = 'hum:' + JSON.stringify(cfg) + dir + frame;
+    return memo(key, () => sprite(16, 20, (P) => {
+      const skin = cfg.skin, hair = cfg.hair, shirt = cfg.shirt, pants = cfg.pants, shoes = cfg.shoes || '#3a2a20';
+      const hairD = Col.shade(hair, 0.75), shirtD = Col.shade(shirt, 0.8), skinD = Col.shade(skin, 0.85);
+      const bob = frame === 0 ? 0 : (frame === 1 ? -1 : 0);
+      const lA = frame === 1 ? -1 : frame === 2 ? 1 : 0; // leg offset
+      // legs
+      P.rect(5, 14 + bob, 3, 4, pants); P.rect(8, 14 + bob, 3, 4, pants);
+      if (dir === 1 || dir === 2) { P.rect(5, 14 + bob + lA, 3, 4, pants); P.rect(8, 14 + bob - lA, 3, 4, pants); }
+      else { P.rect(5, 14 + bob + lA, 3, 4, pants); P.rect(8, 14 + bob - lA, 3, 4, pants); }
+      P.rect(5, 18 + bob + (dir < 3 ? lA : 0), 3, 1, shoes); P.rect(8, 18 + bob - (dir < 3 ? lA : 0), 3, 1, shoes);
+      P.rect(5, 18 + bob, 6, 1, shoes);
+      // body
+      P.rect(4, 9 + bob, 8, 5, shirt);
+      P.rect(4, 13 + bob, 8, 1, shirtD);
+      // arms
+      const swing = frame === 1 ? 1 : frame === 2 ? -1 : 0;
+      P.rect(3, 9 + bob + swing, 1, 4, shirt); P.rect(12, 9 + bob - swing, 1, 4, shirt);
+      P.px(3, 13 + bob + swing, skin); P.px(12, 13 + bob - swing, skin);
+      // head
+      P.rect(4, 2 + bob, 8, 7, skin);
+      P.rect(4, 8 + bob, 8, 1, skinD);
+      // hair
+      P.rect(4, 1 + bob, 8, 2, hair); P.rect(3, 2 + bob, 1, 4, hair); P.rect(12, 2 + bob, 1, 4, hair);
+      P.rect(4, 3 + bob, 8, 1, hairD);
+      if (dir === 3) { P.rect(4, 3 + bob, 8, 5, hair); P.rect(4, 7 + bob, 8, 1, hairD); }
+      // face
+      if (dir === 0) { P.px(6, 5 + bob, '#222'); P.px(9, 5 + bob, '#222'); P.px(7, 7 + bob, skinD); P.px(8, 7 + bob, skinD); }
+      if (dir === 1) { P.px(5, 5 + bob, '#222'); P.rect(11, 2 + bob, 2, 5, hair); }
+      if (dir === 2) { P.px(10, 5 + bob, '#222'); P.rect(3, 2 + bob, 2, 5, hair); }
+      // hat
+      if (cfg.hat) {
+        const hat = cfg.hat, hatD = Col.shade(hat, 0.8);
+        P.rect(2, 2 + bob, 12, 1, hatD); P.rect(4, 0 + bob, 8, 2, hat); P.rect(4, 1 + bob, 8, 1, hatD);
+      }
+      // apron for the barista look
+      if (cfg.apron) { P.rect(5, 11 + bob, 6, 3, cfg.apron); P.px(5, 10 + bob, cfg.apron); P.px(10, 10 + bob, cfg.apron); }
+    }));
+  };
+
+  // ---- crops ----------------------------------------------------------------
+  // Each crop: canvas 16x24 (bottom 16 rows over the tile, top 8 overhang)
+  SP.crop = function (type, stage, wet) {
+    return memo('crop:' + type + stage, () => sprite(16, 24, (P) => {
+      const g1 = '#3f9a3a', g2 = '#5cb84a', g3 = '#2f7a2c';
+      const base = 24; // ground line at bottom
+      if (stage === 0) { // sprout
+        P.vline(8, base - 4, 3, g1); P.px(7, base - 4, g2); P.px(9, base - 5, g2); return;
+      }
+      if (type === 'tomato') {
+        const h = [0, 6, 9, 11, 11][stage];
+        P.vline(8, base - h, h, g3); P.vline(7, base - h + 2, 2, g3);
+        for (let i = 0; i < stage * 2 + 1; i++) { const y = base - 2 - i * 2, x = 8 + (i % 2 ? 2 : -2); P.rect(x - 1, y - 1, 3, 2, i % 2 ? g1 : g2); }
+        if (stage === 3) { P.px(6, base - 7, '#f8e050'); P.px(11, base - 9, '#f8e050'); }
+        if (stage === 4) { P.disc(6, base - 7, 1.5, '#d83a2a'); P.disc(11, base - 9, 1.5, '#e04a30'); P.disc(9, base - 4, 1.3, '#d83a2a'); P.px(6, base - 8, '#fff'); }
+      } else if (type === 'corn') {
+        const h = [0, 8, 13, 18, 21][stage];
+        P.vline(8, base - h, h, '#6aa83a'); P.vline(7, base - h + 3, h - 3, '#5a983a');
+        for (let i = 1; i < stage + 2; i++) { const y = base - i * 4; P.line(8, y, 8 - 4, y - 3, g2); P.line(8, y - 2, 8 + 4, y - 5, g1); }
+        if (stage >= 3) { P.rect(10, base - 12, 3, 6, '#e8d060'); P.rect(10, base - 13, 3, 2, '#c8b850'); }
+        if (stage === 4) { P.rect(4, base - 14, 3, 6, '#f0d868'); P.px(5, base - 15, '#8a6a3a'); P.px(11, base - 14, '#8a6a3a'); P.rect(6, base - 22, 4, 3, '#d8c870'); }
+      } else if (type === 'sunflower') {
+        const h = [0, 7, 12, 17, 20][stage];
+        P.vline(8, base - h, h, '#4a8a3a');
+        for (let i = 1; i < stage + 1; i++) { const y = base - i * 4; P.rect(4, y, 4, 2, g2); P.rect(9, y - 2, 4, 2, g1); }
+        if (stage === 3) { P.disc(8, base - h, 2.5, '#6a8a3a'); P.px(8, base - h - 3, '#e8c040'); }
+        if (stage === 4) { P.disc(8, base - h, 5, '#f0c020'); P.disc(8, base - h, 2.8, '#6a4020'); P.px(7, base - h - 1, '#8a5a30'); }
+      } else if (type === 'coffee') {
+        // coffee tree: 0 seedling 1 small 2 bush 3 tree 4 flowering 5 ripe
+        if (stage === 1) { P.vline(8, base - 6, 6, '#6a4a2a'); P.disc(8, base - 7, 2.5, g3); P.px(7, base - 8, g2); return; }
+        const dark = '#2d6b2a', mid = '#3e8a36', lit = '#58a648';
+        P.rect(7, base - 12, 2, 12, '#6a4a2a');
+        if (stage === 2) { P.ellipse(8, base - 10, 5, 5, dark); P.ellipse(7, base - 11, 3, 3, mid); P.px(9, base - 13, lit); }
+        else {
+          P.ellipse(8, base - 13, 7, 8, dark); P.ellipse(6, base - 14, 4, 5, mid); P.ellipse(10, base - 11, 4, 4, mid); P.px(5, base - 17, lit); P.px(11, base - 14, lit); P.px(8, base - 19, lit);
+          if (stage === 4) { for (const [x, y] of [[4, 12], [10, 17], [12, 11], [7, 9], [9, 15], [5, 8]]) { P.px(x, base - y, '#fff'); P.px(x + 1, base - y, '#fff5f8'); } }
+          if (stage === 5) { for (const [x, y] of [[4, 12], [10, 17], [12, 11], [7, 9], [9, 15], [5, 8], [11, 14], [6, 16]]) { P.px(x, base - y, '#d42a2a'); P.px(x + 1, base - y, '#ef4040'); P.px(x, base - y + 1, '#a01c1c'); P.px(x + 1, base - y + 1, '#d42a2a'); } }
+        }
+      }
+    }));
+  };
+
+  // ---- trees, bushes, flora --------------------------------------------------
+  SP.tree = function (seed, season, kind) { // kind: 'leaf' | 'pine'
+    return memo('tree:' + seed + season + kind, () => sprite(24, 32, (P) => {
+      const r = C.rng(seed);
+      const pal = SP.season[season];
+      const trunk = '#6b4a2b', trunkD = '#4e3620';
+      if (kind === 'pine') {
+        P.rect(11, 22, 2, 10, trunk); P.px(11, 26, trunkD);
+        const c1 = season === 'winter' ? '#5f7f6a' : '#2f6e3a', c2 = season === 'winter' ? '#7d9d88' : '#3f8a4a';
+        for (let i = 0; i < 4; i++) { const y = 8 + i * 5, w = 4 + i * 2.2; P.ellipse(12, y + 2, w, 3, i % 2 ? c1 : c2); }
+        P.rect(11, 3, 2, 5, c2); P.px(12, 2, c2);
+        if (season === 'winter') for (let i = 0; i < 4; i++) { const y = 10 + i * 5; P.hline(12 - i * 2 - 2, y, 4 + i * 4, '#f4f8fa'); }
+        return;
+      }
+      P.rect(10, 20, 4, 12, trunk); P.vline(10, 20, 12, trunkD); P.px(12, 27, trunkD);
+      const leaf = pal.leaf;
+      const blobs = [[12, 12, 9, 8], [7 + r.int(3), 15, 6, 5], [15 + r.int(3), 14, 6, 5], [12, 7 + r.int(2), 6, 5]];
+      blobs.forEach((b, i) => P.ellipse(b[0], b[1], b[2], b[3], leaf[i % 2 ? 1 : 0]));
+      P.ellipse(10, 10, 4, 3, leaf[2]);
+      for (let i = 0; i < 6; i++) P.px(4 + r.int(16), 6 + r.int(12), leaf[2]);
+      for (let i = 0; i < 5; i++) P.px(4 + r.int(16), 5 + r.int(10), Col.lighten(leaf[1], 0.15));
+      if (pal.blossom) for (let i = 0; i < 7; i++) P.px(5 + r.int(14), 6 + r.int(12), pal.blossom);
+      if (season === 'winter') { P.ellipse(12, 6, 6, 2, '#f4f8fa'); P.ellipse(8, 11, 3, 1.5, '#f4f8fa'); }
+      if (season === 'autumn') { P.px(3 + r.int(4), 24 + r.int(6), '#d08a3a'); P.px(16 + r.int(5), 26 + r.int(5), '#c86a3a'); }
+    }));
+  };
+
+  SP.bush = (seed, season) => memo('bush' + seed + season, () => sprite(16, 16, (P) => {
+    const r = C.rng(seed); const leaf = SP.season[season].leaf;
+    P.ellipse(8, 10, 7, 5, leaf[0]); P.ellipse(6, 9, 4, 3, leaf[1]); P.px(10, 7, leaf[2]); P.px(4, 11, leaf[2]);
+    if (season !== 'winter') for (let i = 0; i < 3; i++) P.px(3 + r.int(10), 7 + r.int(6), r.chance(0.5) ? '#e04a3a' : Col.lighten(leaf[1], 0.2));
+  }));
+  SP.flower = (seed) => memo('flower' + seed, () => sprite(16, 16, (P) => {
+    const r = C.rng(seed); const cols = ['#f06a8a', '#f8d050', '#ffffff', '#b08af0', '#f89050'];
+    for (let i = 0; i < 3; i++) { const x = 3 + r.int(10), y = 6 + r.int(7); P.vline(x, y, 4, '#4a9a3a'); const c = r.pick(cols); P.px(x - 1, y - 1, c); P.px(x + 1, y - 1, c); P.px(x, y - 2, c); P.px(x, y, c); P.px(x, y - 1, '#f8e070'); }
+  }));
+  SP.mint = () => memo('mint', () => sprite(16, 16, (P) => {
+    for (let i = 0; i < 4; i++) { const x = 3 + i * 3, y = 8 + (i % 2) * 2; P.vline(x, y, 5, '#3a8a3a'); P.rect(x - 1, y - 2, 3, 3, '#6ad06a'); P.px(x, y - 2, '#a0f0a0'); }
+  }));
+  SP.rock = (seed) => memo('rock' + seed, () => sprite(16, 16, (P) => {
+    const r = C.rng(seed); P.ellipse(8, 10, 5 + r.int(2), 4, '#8a8a84'); P.ellipse(7, 9, 3, 2, '#a4a49e'); P.px(6, 8, '#bcbcb6'); P.hline(4, 13, 8, '#6a6a64');
+  }));
+  SP.stump = () => memo('stump', () => sprite(16, 16, (P) => { P.rect(4, 8, 8, 6, '#6b4a2b'); P.ellipse(8, 8, 4.5, 2.5, '#a8804a'); P.ellipse(8, 8, 2.5, 1.2, '#8a6a3a'); }));
+  SP.lily = () => memo('lily', () => sprite(16, 16, (P) => { P.ellipse(7, 8, 4, 3, '#3f9a4a'); P.px(9, 6, '#4a8fc0'); P.px(10, 8, '#f890b0'); P.px(11, 7, '#f890b0'); }));
+  SP.reeds = () => memo('reeds', () => sprite(16, 16, (P) => { for (let i = 0; i < 4; i++) { const x = 3 + i * 3; P.vline(x, 4 + (i % 2) * 2, 10, '#6a9a4a'); P.rect(x, 3 + (i % 2) * 2, 1, 3, '#8a6a3a'); } }));
+
+  // ---- buildings & stations ------------------------------------------------
+  SP.house = () => memo('house', () => sprite(7 * T, 7 * T, (P) => {
+    // 7 tiles wide, 7 tall (top 1.5 tiles = roof overhang). Ground footprint rows 2..6.
+    const wall = '#efe2c4', wallD = '#d8c8a4', roof = '#b8503a', roofD = '#8e3a2a', roofL = '#d0685a', wood = '#7a5230';
+    P.rect(4, 40, 104, 68, wall);
+    P.rect(4, 100, 104, 8, wallD); // base shadow
+    // roof
+    for (let y = 0; y < 44; y++) { const inset = Math.max(0, 8 - y / 2); P.hline(inset, y + 2, 112 - inset * 2, y % 4 === 0 ? roofD : (y % 4 === 2 ? roofL : roof)); }
+    P.hline(0, 46, 112, roofD); P.hline(0, 45, 112, roofD);
+    // windows
+    const win = (x, y) => { P.rect(x, y, 14, 12, wood); P.rect(x + 2, y + 2, 10, 8, '#8ac0e0'); P.vline(x + 6, y + 2, 8, wood); P.hline(x + 2, y + 6, 10, wood); P.rect(x - 1, y + 12, 16, 2, '#c8b48a'); };
+    win(14, 58); win(84, 58); win(14, 80); win(84, 80);
+    // door
+    P.rect(46, 74, 20, 34, wood); P.rect(48, 76, 16, 30, '#8a6238'); P.px(60, 92, '#f0d060'); P.rect(48, 76, 16, 2, '#6a4a2a');
+    // chimney
+    P.rect(84, 0, 10, 20, '#8a7a6a'); P.rect(84, 0, 10, 3, '#6a5a4a');
+    // porch light
+    P.rect(70, 66, 4, 5, '#3a3a3a'); P.px(71, 68, '#ffe080'); P.px(72, 68, '#ffe080');
+    // flower boxes
+    P.rect(12, 92, 18, 4, wood); P.px(14, 90, '#f06a8a'); P.px(18, 90, '#f8d050'); P.px(22, 90, '#f06a8a'); P.px(26, 90, '#ffffff');
+    P.rect(82, 92, 18, 4, wood); P.px(84, 90, '#f8d050'); P.px(88, 90, '#f06a8a'); P.px(92, 90, '#ffffff'); P.px(96, 90, '#f8d050');
+  }));
+
+  SP.shed = () => memo('shed', () => sprite(5 * T, 5 * T, (P) => {
+    const wood = '#8a6238', woodD = '#6a4a2a', tin = '#9aa4aa', tinD = '#7a848a';
+    P.rect(4, 28, 72, 52, wood);
+    for (let x = 4; x < 76; x += 6) P.vline(x, 28, 52, woodD);
+    for (let y = 0; y < 28; y++) { const inset = Math.max(0, 6 - y / 2); P.hline(inset, y + 2, 80 - inset * 2, y % 3 === 0 ? tinD : tin); }
+    P.hline(0, 30, 80, tinD);
+    // open front (dark interior) with roaster inside
+    P.rect(22, 44, 36, 36, '#3a2a1e');
+    // roaster: drum on a stand
+    P.rect(30, 70, 20, 8, '#4a4a4a'); P.ellipse(40, 62, 9, 7, '#6a6a70'); P.ellipse(40, 62, 6, 4, '#8a8a90'); P.disc(40, 62, 2, '#ff9a30');
+    P.rect(48, 52, 4, 10, '#5a5a5a'); P.px(49, 50, '#8a8a8a');
+    P.rect(26, 74, 4, 6, '#d8b88a'); P.rect(52, 74, 4, 6, '#d8b88a'); // sacks
+    // sign
+    P.rect(56, 34, 18, 8, '#e8d8b8'); P.px(60, 37, '#3a2a1e'); P.px(63, 37, '#3a2a1e'); P.px(66, 37, '#3a2a1e'); P.px(69, 37, '#3a2a1e');
+  }));
+
+  // Counter body: 5x3 tiles. Row 0 = open space with posts (player stands here), rows 1-2 = counter.
+  SP.counter = () => memo('counter', () => sprite(5 * T, 3 * T, (P) => {
+    const wood = '#a06a3a', woodD = '#7a4a2a';
+    // posts
+    P.rect(1, 0, 3, 30, woodD); P.rect(76, 0, 3, 30, woodD);
+    // counter body
+    P.rect(0, 20, 80, 24, wood); P.rect(0, 18, 80, 3, '#c8905a'); P.rect(0, 44, 80, 4, woodD);
+    for (let x = 6; x < 80; x += 12) P.vline(x, 24, 18, woodD);
+    // espresso machine
+    P.rect(8, 8, 14, 12, '#c0c0c8'); P.rect(9, 5, 12, 4, '#a0a0a8'); P.px(12, 12, '#ff4040'); P.rect(14, 15, 4, 4, '#3a3a3a'); P.px(19, 10, '#4a4a4a');
+    // cups
+    P.rect(58, 12, 5, 6, '#fff'); P.rect(65, 12, 5, 6, '#fff'); P.px(63, 14, '#fff'); P.px(70, 14, '#fff');
+    P.rect(58, 10, 12, 1, '#c8b8a8');
+    // chalkboard on the counter front
+    P.rect(30, 24, 20, 14, '#2a3a2a'); P.rect(31, 25, 18, 12, '#1f2e22'); P.hline(33, 28, 8, '#e8e0c0'); P.hline(33, 31, 12, '#e8e0c0'); P.hline(33, 34, 6, '#f0d070');
+  }));
+  // Awning: drawn on the overlay layer above everything. 80 x 18.
+  SP.awning = (lights) => memo('awning' + !!lights, () => sprite(5 * T, 18, (P) => {
+    const cream = '#f4e8d0';
+    P.hline(0, 1, 80, '#7a4a2a');
+    for (let x = 0; x < 80; x += 8) P.rect(x, 2, 8, 12, (x / 8) % 2 ? '#e05a4a' : cream);
+    for (let x = 0; x < 80; x += 8) P.rect(x, 13, 8, 3, (x / 8) % 2 ? '#c04a3a' : '#e0d4b8');
+    for (let x = 4; x < 80; x += 8) P.px(x, 16, (x / 8 | 0) % 2 ? '#c04a3a' : '#e0d4b8');
+    if (lights) { for (let x = 6; x < 80; x += 8) { P.px(x, 17, ['#ffd060', '#ff8080', '#80e0ff', '#c0ff80'][((x - 6) / 8) % 4]); P.px(x, 16, '#3a3a3a'); } }
+  }));
+
+  SP.cart = () => memo('cart', () => sprite(3 * T, 3 * T, (P) => {
+    const wood = '#a06a3a', woodD = '#7a4a2a';
+    // canopy
+    for (let x = 0; x < 48; x += 6) P.rect(x, 2, 6, 10, (x / 6) % 2 ? '#e8a030' : '#f4e8d0');
+    P.hline(0, 12, 48, woodD);
+    P.rect(4, 12, 2, 20, woodD); P.rect(42, 12, 2, 20, woodD);
+    P.rect(2, 26, 44, 14, wood); P.rect(2, 24, 44, 3, '#c8905a');
+    P.disc(10, 44, 4, '#4a3a2a'); P.disc(38, 44, 4, '#4a3a2a'); P.disc(10, 44, 1.5, '#8a7a6a'); P.disc(38, 44, 1.5, '#8a7a6a');
+    // goods
+    P.rect(8, 18, 6, 6, '#e8d8a0'); P.rect(16, 18, 6, 6, '#d8b060'); P.rect(24, 18, 6, 6, '#c8a878'); P.rect(32, 19, 8, 5, '#f0f0f0');
+    P.px(10, 20, '#d83a2a'); P.px(18, 20, '#3a8a3a'); P.px(26, 20, '#8a4a2a');
+  }));
+
+  SP.pulper = () => memo('pulper', () => sprite(T, 24, (P) => {
+    P.rect(3, 10, 10, 12, '#6a6a70'); P.rect(2, 4, 12, 7, '#8a8a90'); P.rect(4, 2, 8, 3, '#9a9aa0'); P.rect(5, 1, 6, 2, '#b8332a');
+    P.rect(13, 8, 2, 6, '#4a4a4a'); P.px(14, 7, '#c8c8c8'); P.rect(0, 20, 16, 4, '#5a4a3a'); P.px(6, 16, '#d83a2a'); P.px(8, 17, '#d83a2a');
+  }));
+
+  SP.patio = (w, h, roof) => memo('patio' + w + h + roof, () => sprite(w * T, h * T + 16, (P) => {
+    // low wall
+    const oy = 16;
+    P.rect(0, oy, w * T, h * T, '#c9c2b4');
+    P.rect(0, oy, w * T, 3, '#8a7a6a'); P.rect(0, oy + h * T - 3, w * T, 3, '#8a7a6a');
+    P.rect(0, oy, 3, h * T, '#8a7a6a'); P.rect(w * T - 3, oy, 3, h * T, '#8a7a6a');
+    if (roof) {
+      for (const x of [2, w * T - 5]) for (const y of [oy + 4, oy + h * T - 10]) P.rect(x, y, 3, 6, '#5a4a3a');
+      for (let y = 0; y < 12; y++) P.hline(0, y + 2, w * T, y % 3 === 0 ? '#7a848a' : 'rgba(154,164,170,0.75)');
+    }
+  }));
+  SP.parchmentDots = (n, w, h, dry) => memo('pd' + n + w + h + dry, () => sprite(w * T, h * T, (P) => {
+    const r = C.rng(77);
+    for (let i = 0; i < n; i++) { const x = 5 + r.int(w * T - 10), y = 5 + r.int(h * T - 10); P.rect(x, y, 2, 1, dry ? '#a8c87a' : '#e8d8a8'); }
+  }));
+
+  SP.coop = () => memo('coop', () => sprite(2 * T, 2 * T + 8, (P) => {
+    const wood = '#9a6a3a', woodD = '#7a4a2a';
+    P.rect(2, 16, 28, 22, wood); for (let x = 2; x < 30; x += 5) P.vline(x, 16, 22, woodD);
+    for (let y = 0; y < 14; y++) { const inset = Math.max(0, 6 - y / 2); P.hline(inset, y + 4, 32 - inset * 2, y % 3 ? '#b8503a' : '#8e3a2a'); }
+    P.rect(12, 26, 8, 12, '#3a2a1e'); P.rect(20, 34, 12, 4, '#c8a878');
+  }));
+
+  SP.fence = (kind) => memo('fence' + kind, () => sprite(T, T, (P) => {
+    const w = '#c8a068', d = '#9a7a4a';
+    if (kind === 'h' || kind === 'x') { P.rect(0, 6, 16, 2, w); P.rect(0, 11, 16, 2, w); }
+    if (kind === 'v' || kind === 'x') { P.rect(7, 0, 2, 16, w); }
+    P.rect(6, 3, 4, 11, w); P.rect(6, 3, 4, 1, '#e0c080'); P.rect(6, 13, 4, 1, d);
+  }));
+  SP.lantern = (on) => memo('lantern' + on, () => sprite(T, 24, (P) => {
+    P.rect(7, 8, 2, 16, '#4a4a4a'); P.rect(5, 2, 6, 7, '#3a3a3a'); P.rect(6, 3, 4, 5, on ? '#ffe080' : '#a0a0a0'); P.px(7, 0, '#3a3a3a'); P.px(8, 1, '#3a3a3a');
+  }));
+  SP.bench = () => memo('bench', () => sprite(2 * T, T, (P) => {
+    P.rect(2, 4, 28, 3, '#a8784a'); P.rect(2, 9, 28, 3, '#a8784a'); P.rect(3, 12, 2, 4, '#5a4a3a'); P.rect(27, 12, 2, 4, '#5a4a3a'); P.rect(2, 1, 28, 2, '#a8784a');
+  }));
+  SP.mailbox = (flag) => memo('mailbox' + flag, () => sprite(T, 24, (P) => {
+    P.rect(7, 12, 2, 12, '#6a4a2a'); P.rect(3, 5, 10, 8, '#4a6a9a'); P.rect(3, 4, 10, 1, '#6a8aba'); P.px(11, 9, '#f0d060');
+    if (flag) { P.rect(13, 3, 1, 7, '#d83a2a'); P.rect(13, 3, 3, 3, '#d83a2a'); }
+  }));
+  SP.pot = (seed) => memo('pot' + seed, () => sprite(T, T, (P) => {
+    P.rect(4, 9, 8, 6, '#b8603a'); P.rect(3, 8, 10, 2, '#d07a4a'); const r = C.rng(seed); const c = r.pick(['#f06a8a', '#f8d050', '#ffffff', '#b08af0']);
+    P.rect(5, 5, 6, 4, '#4a9a3a'); P.px(6, 4, c); P.px(9, 3, c); P.px(8, 6, c);
+  }));
+  SP.sign = () => memo('sign', () => sprite(T, 24, (P) => {
+    P.rect(7, 10, 2, 14, '#6a4a2a'); P.rect(1, 2, 14, 9, '#e8d8b8'); P.rect(1, 2, 14, 1, '#c8b898');
+    P.rect(4, 5, 5, 4, '#6a4a2a'); P.px(9, 6, '#6a4a2a'); P.px(3, 4, '#f4f4f4'); P.px(5, 3, '#f4f4f4');
+  }));
+  SP.well = () => memo('well', () => sprite(2 * T, 2 * T + 8, (P) => {
+    P.rect(4, 24, 24, 12, '#8a8a84'); P.rect(4, 22, 24, 3, '#a4a49e'); P.rect(8, 26, 16, 6, '#2a4a6a');
+    P.rect(6, 8, 2, 16, '#6a4a2a'); P.rect(24, 8, 2, 16, '#6a4a2a'); for (let y = 0; y < 8; y++) P.hline(4 + Math.max(0, 3 - y / 2), y + 2, 24 - Math.max(0, 3 - y / 2) * 2, y % 3 ? '#b8503a' : '#8e3a2a');
+  }));
+
+  // ---- animals ------------------------------------------------------------------
+  SP.chicken = (frame, dir) => memo('chk' + frame + dir, () => sprite(12, 12, (P) => {
+    const fl = dir === 1;
+    const X = (x) => (fl ? 11 - x : x);
+    P.ellipse(X(6), 7, 4, 3, '#f4f4f0'); P.rect(X(2), 5, 2, 3, '#e0e0d8');
+    P.rect(X(8), 3, 3, 4, '#f4f4f0'); P.px(X(11), 5, '#f0a030'); P.px(X(9), 2, '#e03030'); P.px(X(9), 4, '#222');
+    P.rect(X(5), 10 + (frame ? 1 : 0), 1, 2, '#f0a030'); P.rect(X(7), 10 + (frame ? 0 : 1), 1, 2, '#f0a030');
+  }));
+  SP.cat = (frame) => memo('cat' + frame, () => sprite(16, 12, (P) => {
+    const g = '#8a8a90', d = '#6a6a70';
+    if (frame === 0) { // sleeping curl
+      P.ellipse(8, 7, 7, 4, g); P.ellipse(5, 6, 3, 2.5, d); P.px(2, 4, g); P.px(4, 3, g); P.hline(11, 9, 4, d); P.px(3, 6, '#222');
+    } else { // sitting
+      P.ellipse(8, 8, 4, 3.5, g); P.rect(6, 2, 5, 5, g); P.px(6, 1, g); P.px(10, 1, g); P.px(7, 4, '#5ad0a0'); P.px(9, 4, '#5ad0a0'); P.rect(12, 6, 3, 1, d); P.px(14, 5, d); P.px(14, 4, d);
+    }
+  }));
+  SP.fish = () => memo('fishsp', () => sprite(12, 6, (P) => { P.ellipse(6, 3, 4, 2, '#8ab0c8'); P.px(1, 2, '#6a90a8'); P.px(1, 4, '#6a90a8'); P.px(8, 2, '#222'); }));
+
+  // ---- item & tool icons (16x16) ------------------------------------------------
+  const icons = {
+    hand: (P) => { P.rect(5, 4, 7, 9, '#e8b898'); P.rect(4, 6, 1, 5, '#e8b898'); P.rect(12, 6, 1, 5, '#e8b898'); for (let i = 0; i < 4; i++) P.vline(5 + i * 2, 2 + (i === 1 || i === 2 ? 0 : 1), 3, '#e8b898'); P.rect(5, 12, 7, 2, '#c85a3a'); },
+    hoe: (P) => { P.line(3, 13, 12, 4, '#a8784a'); P.line(4, 13, 13, 4, '#8a5e38'); P.rect(11, 2, 4, 3, '#8a8a90'); P.rect(13, 2, 2, 6, '#8a8a90'); },
+    water: (P) => { P.rect(3, 6, 8, 7, '#5a8ac0'); P.rect(4, 5, 6, 1, '#7aaad8'); P.rect(11, 8, 3, 2, '#5a8ac0'); P.px(14, 7, '#5a8ac0'); P.rect(5, 3, 4, 2, '#5a8ac0'); P.px(2, 8, '#a0d0f0'); P.px(1, 10, '#a0d0f0'); },
+    bag: (P) => { P.rect(3, 6, 10, 8, '#b08a5a'); P.rect(3, 6, 10, 2, '#8a6a3a'); P.rect(6, 3, 4, 3, '#8a6a3a'); P.px(7, 4, '#3a2a1a'); P.px(8, 4, '#3a2a1a'); },
+    coin: (P) => { P.disc(8, 8, 5.5, '#e0a020'); P.disc(8, 8, 4, '#f8d050'); P.rect(7, 5, 2, 6, '#e0a020'); },
+    heart: (P) => { P.disc(5.5, 6, 3, '#e04a5a'); P.disc(10.5, 6, 3, '#e04a5a'); P.rect(3, 7, 10, 2, '#e04a5a'); P.rect(4, 9, 8, 2, '#e04a5a'); P.rect(6, 11, 4, 1, '#e04a5a'); P.px(7, 12, '#e04a5a'); P.px(8, 12, '#e04a5a'); P.px(5, 5, '#f8a0b0'); },
+    seedbag: (P, c) => { P.rect(4, 5, 8, 9, '#e8d8b8'); P.rect(5, 3, 6, 2, '#c8b898'); P.rect(6, 2, 4, 1, '#a89878'); P.disc(8, 10, 2, c); },
+    coffee_seed: (P) => { P.rect(5, 8, 6, 7, '#b8603a'); P.rect(4, 7, 8, 2, '#d07a4a'); P.vline(8, 2, 6, '#3a8a3a'); P.ellipse(6, 4, 2, 1.5, '#4a9a3a'); P.ellipse(10, 3, 2, 1.5, '#5aa84a'); },
+    tomato_seed: (P) => icons.seedbag(P, '#d83a2a'),
+    corn_seed: (P) => icons.seedbag(P, '#f0d060'),
+    sunflower_seed: (P) => icons.seedbag(P, '#3a3a3a'),
+    cherry: (P) => { P.disc(6, 9, 3, '#d42a2a'); P.disc(11, 7, 3, '#ef4040'); P.px(5, 8, '#ff8080'); P.px(10, 6, '#ff8080'); P.line(6, 6, 9, 2, '#4a8a3a'); P.line(11, 4, 9, 2, '#4a8a3a'); P.ellipse(8, 2, 2, 1, '#5aa84a'); },
+    parchment: (P) => { for (const [x, y] of [[4, 5], [9, 4], [6, 9], [11, 9], [8, 12]]) { P.ellipse(x + 1, y + 1, 2, 1.5, '#e8d8a8'); P.px(x + 1, y + 1, '#c8b888'); } },
+    green: (P) => { for (const [x, y] of [[4, 5], [9, 4], [6, 9], [11, 9], [8, 12]]) { P.ellipse(x + 1, y + 1, 2, 1.5, '#a8c87a'); P.px(x + 1, y + 1, '#7a9a4a'); } },
+    roast_light: (P) => { for (const [x, y] of [[4, 5], [9, 4], [6, 9], [11, 9], [8, 12]]) { P.ellipse(x + 1, y + 1, 2, 1.5, '#a8744a'); P.px(x + 1, y + 1, '#6a4a2a'); } },
+    roast_medium: (P) => { for (const [x, y] of [[4, 5], [9, 4], [6, 9], [11, 9], [8, 12]]) { P.ellipse(x + 1, y + 1, 2, 1.5, '#7a4a2a'); P.px(x + 1, y + 1, '#4a2a1a'); } },
+    roast_dark: (P) => { for (const [x, y] of [[4, 5], [9, 4], [6, 9], [11, 9], [8, 12]]) { P.ellipse(x + 1, y + 1, 2, 1.5, '#4a2e1e'); P.px(x + 1, y + 1, '#2a1a10'); } },
+    tomato: (P) => { P.disc(8, 9, 5, '#d83a2a'); P.px(6, 7, '#ff8070'); P.rect(6, 3, 4, 2, '#4a9a3a'); P.px(8, 2, '#4a9a3a'); },
+    corn: (P) => { P.rect(6, 2, 4, 11, '#f0d060'); P.rect(5, 5, 6, 6, '#f0d060'); for (let y = 3; y < 12; y += 2) for (let x = 6; x < 10; x += 2) P.px(x + (y % 4 === 1 ? 1 : 0), y, '#d8b040'); P.rect(4, 8, 2, 7, '#6aa83a'); P.rect(10, 9, 2, 6, '#6aa83a'); },
+    sunflower: (P) => { P.disc(8, 8, 6, '#f0c020'); P.disc(8, 8, 3, '#6a4020'); P.px(7, 7, '#8a5a30'); },
+    egg: (P) => { P.ellipse(8, 8, 4, 5, '#f8f0e0'); P.px(6, 5, '#ffffff'); },
+    milk: (P) => { P.rect(5, 5, 6, 10, '#f8f8f8'); P.rect(6, 2, 4, 3, '#e0e0e0'); P.rect(5, 9, 6, 3, '#6aa0e0'); },
+    panela: (P) => { P.rect(4, 6, 8, 7, '#b87a3a'); P.rect(4, 5, 8, 2, '#d09a5a'); P.px(6, 8, '#d09a5a'); },
+    cinnamon: (P) => { P.rect(4, 3, 3, 11, '#a8603a'); P.rect(9, 2, 3, 11, '#b8704a'); P.px(5, 4, '#d09060'); P.px(10, 3, '#d09060'); },
+    cocoa: (P) => { P.rect(4, 4, 8, 9, '#6a3a2a'); P.rect(4, 4, 8, 2, '#8a5a3a'); P.px(6, 8, '#8a5a3a'); },
+    mint: (P) => SP.mint().width && P.blit(SP.mint(), 0, 0),
+    flower: (P) => P.blit(SP.flower(5), 0, 0),
+    fish: (P) => { P.ellipse(8, 8, 5, 2.5, '#8ab0c8'); P.px(2, 6, '#6a90a8'); P.px(2, 10, '#6a90a8'); P.px(11, 7, '#222'); P.px(7, 6, '#b0d0e0'); },
+    cup: (P, c, foam) => { P.rect(3, 5, 9, 8, '#f4f4f4'); P.rect(4, 6, 7, 3, c); P.rect(12, 7, 2, 4, '#f4f4f4'); P.rect(3, 13, 9, 1, '#d0d0d0'); if (foam) P.rect(4, 6, 7, 1, '#fff8e8'); P.px(6, 2, '#c0c0c0'); P.px(8, 3, '#c0c0c0'); },
+    espresso: (P) => icons.cup(P, '#3a2418'),
+    americano: (P) => icons.cup(P, '#4a3020'),
+    latte: (P) => icons.cup(P, '#c8a070', true),
+    cappuccino: (P) => icons.cup(P, '#a88050', true),
+    cold_brew: (P) => { P.rect(4, 3, 8, 11, '#c8e0f0'); P.rect(5, 6, 6, 7, '#5a3a20'); P.px(6, 7, '#f0f0f0'); P.px(9, 9, '#f0f0f0'); P.line(10, 1, 8, 6, '#e05a4a'); },
+    olla: (P) => { P.ellipse(8, 9, 5, 4, '#b8603a'); P.rect(5, 4, 6, 3, '#3a2418'); P.rect(4, 3, 8, 2, '#d07a4a'); P.px(13, 8, '#b8603a'); },
+    mocha: (P) => icons.cup(P, '#5a3a2a', true),
+    mint_tea: (P) => icons.cup(P, '#a8c860'),
+    settings: (P) => { P.disc(8, 8, 5, '#e8e8e8'); P.disc(8, 8, 2, '#4a4a4a'); for (const [x, y] of [[8, 1], [8, 14], [1, 8], [14, 8], [3, 3], [12, 3], [3, 12], [12, 12]]) P.rect(x - 1, y - 1, 3, 3, '#e8e8e8'); },
+    sound_on: (P) => { P.rect(3, 6, 3, 4, '#e8e8e8'); P.rect(6, 4, 2, 8, '#e8e8e8'); P.px(8, 3, '#e8e8e8'); P.px(8, 12, '#e8e8e8'); P.px(11, 5, '#e8e8e8'); P.px(12, 7, '#e8e8e8'); P.px(12, 8, '#e8e8e8'); P.px(11, 10, '#e8e8e8'); },
+    sound_off: (P) => { P.rect(3, 6, 3, 4, '#e8e8e8'); P.rect(6, 4, 2, 8, '#e8e8e8'); P.px(8, 3, '#e8e8e8'); P.px(8, 12, '#e8e8e8'); P.line(10, 5, 14, 10, '#e05a4a'); P.line(14, 5, 10, 10, '#e05a4a'); },
+    sun: (P) => { P.disc(8, 8, 4, '#f8d050'); for (const [x, y] of [[8, 1], [8, 15], [1, 8], [15, 8], [3, 3], [13, 3], [3, 13], [13, 13]]) P.px(x, y, '#f8d050'); },
+    cloud: (P) => { P.ellipse(6, 9, 4, 3, '#e8e8f0'); P.ellipse(10, 8, 4, 3.5, '#f4f4f8'); P.rect(3, 9, 11, 3, '#e8e8f0'); },
+    rain: (P) => { icons.cloud(P); P.px(5, 13, '#7ab0e0'); P.px(8, 14, '#7ab0e0'); P.px(11, 13, '#7ab0e0'); },
+    snow: (P) => { icons.cloud(P); P.px(5, 13, '#fff'); P.px(8, 14, '#fff'); P.px(11, 13, '#fff'); },
+    moon: (P) => { P.disc(8, 8, 5, '#f0e8c0'); P.disc(10, 7, 4.2, 'rgba(0,0,0,0)'); P.g.globalCompositeOperation = 'destination-out'; P.disc(10.5, 6.5, 4, '#000'); P.g.globalCompositeOperation = 'source-over'; },
+    star: (P) => { P.px(8, 3, '#fff'); P.px(8, 13, '#fff'); P.rect(6, 7, 5, 3, '#f8d050'); P.rect(7, 5, 3, 7, '#f8d050'); P.px(5, 8, '#f8d050'); P.px(11, 8, '#f8d050'); },
+    letter: (P) => { P.rect(2, 4, 12, 9, '#f8f4e8'); P.line(2, 4, 8, 9, '#c8b898'); P.line(14, 4, 8, 9, '#c8b898'); P.rect(2, 4, 12, 1, '#c8b898'); },
+    zzz: (P) => { P.rect(3, 10, 4, 1, '#fff'); P.line(6, 10, 3, 13, '#fff'); P.rect(3, 13, 4, 1, '#fff'); P.rect(9, 4, 5, 1, '#fff'); P.line(13, 4, 9, 8, '#fff'); P.rect(9, 8, 5, 1, '#fff'); },
+    rod: (P) => { P.line(2, 14, 12, 3, '#8a6a3a'); P.line(12, 3, 13, 10, '#c0c0c0'); P.px(13, 11, '#c0c0c0'); P.px(12, 12, '#c0c0c0'); },
+    check: (P) => { P.line(3, 8, 6, 11, '#6ad06a'); P.line(6, 11, 13, 4, '#6ad06a'); P.line(3, 9, 6, 12, '#6ad06a'); P.line(6, 12, 13, 5, '#6ad06a'); },
+    x: (P) => { P.line(4, 4, 12, 12, '#e05a4a'); P.line(12, 4, 4, 12, '#e05a4a'); P.line(5, 4, 12, 11, '#e05a4a'); P.line(11, 4, 4, 11, '#e05a4a'); },
+    sprinkler: (P) => { P.rect(7, 8, 2, 7, '#8a8a90'); P.rect(5, 6, 6, 3, '#6a6a70'); P.px(3, 4, '#a0d0f0'); P.px(12, 4, '#a0d0f0'); P.px(1, 7, '#a0d0f0'); P.px(14, 7, '#a0d0f0'); P.px(8, 2, '#a0d0f0'); },
+    roof: (P) => { for (let y = 0; y < 8; y++) P.hline(2 + Math.max(0, 4 - y), y + 3, 12 - Math.max(0, 4 - y) * 2, y % 3 ? '#9aa4aa' : '#7a848a'); P.rect(3, 11, 2, 4, '#5a4a3a'); P.rect(11, 11, 2, 4, '#5a4a3a'); },
+    patio2: (P) => { P.rect(2, 4, 12, 9, '#c9c2b4'); P.rect(2, 4, 12, 1, '#8a7a6a'); P.rect(2, 12, 12, 1, '#8a7a6a'); P.px(5, 7, '#e8d8a8'); P.px(9, 9, '#e8d8a8'); P.px(7, 10, '#e8d8a8'); },
+    roaster2: (P) => { P.ellipse(8, 8, 6, 5, '#6a6a70'); P.ellipse(8, 8, 4, 3, '#8a8a90'); P.disc(8, 8, 1.5, '#ff9a30'); P.rect(4, 13, 8, 2, '#4a4a4a'); },
+    cat: (P) => P.blit(SP.cat(1), 0, 2),
+    lights: (P) => { P.line(1, 5, 14, 5, '#3a3a3a'); for (let i = 0; i < 4; i++) P.rect(2 + i * 4, 6, 2, 3, ['#ffd060', '#ff8080', '#80e0ff', '#c0ff80'][i]); },
+    bench: (P) => { P.rect(2, 5, 12, 2, '#a8784a'); P.rect(2, 9, 12, 2, '#a8784a'); P.rect(3, 11, 1, 3, '#5a4a3a'); P.rect(12, 11, 1, 3, '#5a4a3a'); },
+    hens: (P) => P.blit(SP.chicken(0, 0), 2, 2),
+    home: (P) => { P.rect(3, 8, 10, 7, '#efe2c4'); for (let y = 0; y < 5; y++) P.hline(2 + (4 - y), 3 + y, 12 - (4 - y) * 2, '#b8503a'); P.rect(7, 11, 3, 4, '#7a5230'); },
+    pause: (P) => { P.rect(4, 3, 3, 10, '#e8e8e8'); P.rect(9, 3, 3, 10, '#e8e8e8'); },
+    lang: (P) => { P.rect(2, 3, 12, 9, '#f4f4f4'); P.rect(2, 3, 12, 1, '#c8c8c8'); P.rect(4, 5, 3, 1, '#4a4a4a'); P.rect(4, 7, 8, 1, '#4a4a4a'); P.rect(4, 9, 6, 1, '#4a4a4a'); },
+  };
+  SP.icon = (name) => memo('icon:' + name, () => sprite(16, 16, (P) => { const f = icons[name]; if (f) f(P); else { P.rect(3, 3, 10, 10, '#f0f'); } }));
+  SP.hasIcon = (name) => !!icons[name];
+
+  // ---- player look -----------------------------------------------------------------
+  SP.PLAYER = { skin: '#e8b898', hair: '#4a2a1a', shirt: '#c85a3a', pants: '#3a4a6a', hat: '#e9d8a6', apron: '#f0e8d8' };
+  SP.ROSA = { skin: '#c88a6a', hair: '#2a1a1a', shirt: '#e08a40', pants: '#5a3a5a', hat: null, apron: '#f4f4f4' };
+})();
+
+</script>
+<script>
+/* Cafetal — 20_audio.js
+   Procedural WebAudio: a lo-fi loop (Rhodes-ish chords, bass, brushed drums,
+   vinyl crackle), weather/time ambience, and small sound effects. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const A = (C.audio = {});
+  const { clamp, lerp } = C.math;
+
+  let ctx = null, master, musicBus, sfxBus, ambBus, noiseBuf, delay, delayGain;
+  let musicOn = true, soundOn = true, unlocked = false;
+  A.ready = () => unlocked;
+
+  // Ambience state (set from the game each frame)
+  A.env = { rain: 0, night: 0, snow: 0, indoors: 0 };
+  let rainGain, cricketGain, rainSrc;
+
+  function makeNoise() {
+    const len = ctx.sampleRate * 2, b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return b;
+  }
+
+  A.init = function () {
+    if (unlocked) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    ctx = new AC();
+    unlocked = true;
+    noiseBuf = makeNoise();
+    master = ctx.createGain(); master.gain.value = 0.9;
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 4;
+    master.connect(comp); comp.connect(ctx.destination);
+
+    musicBus = ctx.createGain(); musicBus.gain.value = musicOn ? 0.55 : 0;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3800; lp.Q.value = 0.5;
+    musicBus.connect(lp); lp.connect(master);
+    // echo for melody
+    delay = ctx.createDelay(1.0); delay.delayTime.value = 60 / BPM * 0.75;
+    delayGain = ctx.createGain(); delayGain.gain.value = 0.28;
+    const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = 1800;
+    delay.connect(dlp); dlp.connect(delayGain); delayGain.connect(delay); delayGain.connect(musicBus);
+
+    sfxBus = ctx.createGain(); sfxBus.gain.value = soundOn ? 0.8 : 0; sfxBus.connect(master);
+    ambBus = ctx.createGain(); ambBus.gain.value = soundOn ? 0.7 : 0; ambBus.connect(master);
+
+    // rain: looping filtered noise
+    rainSrc = ctx.createBufferSource(); rainSrc.buffer = noiseBuf; rainSrc.loop = true;
+    const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 900;
+    const rhp = ctx.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 200;
+    rainGain = ctx.createGain(); rainGain.gain.value = 0;
+    rainSrc.connect(rhp); rhp.connect(rlp); rlp.connect(rainGain); rainGain.connect(ambBus); rainSrc.start();
+
+    // crickets: pulsed high tone
+    const cr = ctx.createOscillator(); cr.type = 'sine'; cr.frequency.value = 4300;
+    const crLfo = ctx.createOscillator(); crLfo.type = 'square'; crLfo.frequency.value = 14;
+    const crLfoG = ctx.createGain(); crLfoG.gain.value = 0.5;
+    const crAm = ctx.createGain(); crAm.gain.value = 0.5;
+    crLfo.connect(crLfoG); crLfoG.connect(crAm.gain);
+    cricketGain = ctx.createGain(); cricketGain.gain.value = 0;
+    cr.connect(crAm); crAm.connect(cricketGain); cricketGain.connect(ambBus); cr.start(); crLfo.start();
+
+    // vinyl crackle bed
+    startCrackle();
+    // silent unlock buffer for iOS
+    const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, 22050); s.connect(ctx.destination); s.start();
+    if (ctx.state === 'suspended') ctx.resume();
+    nextNoteTime = ctx.currentTime + 0.1;
+    schedulerTimer = setInterval(scheduler, 40);
+  };
+
+  A.setMusic = (on) => { musicOn = on; if (musicBus) musicBus.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.3); };
+  A.setSound = (on) => { soundOn = on; if (sfxBus) { sfxBus.gain.setTargetAtTime(on ? 0.8 : 0, ctx.currentTime, 0.1); ambBus.gain.setTargetAtTime(on ? 0.7 : 0, ctx.currentTime, 0.3); } };
+  A.suspend = () => { if (ctx && ctx.state === 'running') ctx.suspend(); };
+  A.resume = () => { if (ctx && ctx.state === 'suspended') ctx.resume(); };
+
+  // ---- ambience update -------------------------------------------------------------
+  let birdTimer = 2, mood = 'day';
+  A.update = function (dt) {
+    if (!unlocked) return;
+    const e = A.env;
+    const t = ctx.currentTime;
+    rainGain.gain.setTargetAtTime(e.rain * 0.35, t, 0.8);
+    cricketGain.gain.setTargetAtTime(e.night * (1 - e.rain) * 0.012 * (1 - e.snow), t, 1.0);
+    // birds in daytime
+    birdTimer -= dt;
+    if (birdTimer <= 0) {
+      birdTimer = 2 + Math.random() * 6;
+      if (e.night < 0.4 && e.rain < 0.5 && e.snow < 0.5 && soundOn) bird();
+    }
+    mood = e.night > 0.6 ? 'night' : 'day';
+  };
+
+  function bird() {
+    const t = ctx.currentTime, n = 2 + (Math.random() * 3 | 0), base = 2200 + Math.random() * 1200;
+    for (let i = 0; i < n; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine';
+      const st = t + i * (0.09 + Math.random() * 0.06);
+      o.frequency.setValueAtTime(base, st); o.frequency.exponentialRampToValueAtTime(base * (1.2 + Math.random() * 0.3), st + 0.05); o.frequency.exponentialRampToValueAtTime(base * 0.9, st + 0.1);
+      g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.03, st + 0.01); g.gain.exponentialRampToValueAtTime(0.0005, st + 0.12);
+      o.connect(g); g.connect(ambBus); o.start(st); o.stop(st + 0.14);
+    }
+  }
+
+  function startCrackle() {
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3000;
+    const g = ctx.createGain(); g.gain.value = 0.012;
+    src.connect(hp); hp.connect(g); g.connect(musicBus); src.start();
+    // random clicks
+    const tick = () => {
+      if (!ctx) return;
+      const t = ctx.currentTime, s = ctx.createBufferSource(); s.buffer = noiseBuf;
+      const gg = ctx.createGain(); gg.gain.setValueAtTime(0.06 + Math.random() * 0.05, t); gg.gain.exponentialRampToValueAtTime(0.001, t + 0.012);
+      s.connect(gg); gg.connect(musicBus); s.start(t, Math.random()); s.stop(t + 0.02);
+      setTimeout(tick, 150 + Math.random() * 900);
+    };
+    setTimeout(tick, 500);
+  }
+
+  // ---- music sequencer ---------------------------------------------------------------
+  const BPM = 74;
+  const SPB = 60 / BPM; // seconds per beat
+  // chords as semitone offsets from F3 (F=0). Progression over 8 bars.
+  // Fmaj7 Am7 Dm7 Bbmaj7 | Fmaj7 Gm7 C9 Bbmaj7
+  const F3 = 174.61;
+  const CHORDS = [
+    { root: 0, notes: [0, 4, 7, 11] },   // Fmaj7
+    { root: 4, notes: [4, 7, 11, 14] },  // Am7
+    { root: -3, notes: [-3, 0, 4, 7] },  // Dm7
+    { root: -7, notes: [-7, -3, 0, 4] }, // Bbmaj7
+    { root: 0, notes: [0, 4, 7, 11] },
+    { root: 2, notes: [2, 5, 9, 12] },   // Gm7
+    { root: 7, notes: [7, 11, 14, 17] }, // C7
+    { root: -7, notes: [-7, -3, 0, 4, 9] }, // Bbmaj9
+  ];
+  const PENTA = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21]; // F major pentatonic
+  const freq = (semi, oct = 0) => F3 * Math.pow(2, semi / 12 + oct);
+
+  let nextNoteTime = 0, step = 0, schedulerTimer = null; // 16th steps
+  let melodySeed = 1, melodyR = C.rng(1), melodyPattern = [];
+  function makeMelody() { melodyR = C.rng(melodySeed++ * 7919); melodyPattern = []; let n = 4; for (let i = 0; i < 32; i++) { if (melodyR.chance(0.28)) { n = clamp(n + melodyR.int(5) - 2, 0, PENTA.length - 1); melodyPattern.push(n); } else melodyPattern.push(-1); } }
+  makeMelody();
+
+  function scheduler() {
+    if (!ctx || !musicOn) { if (ctx) nextNoteTime = ctx.currentTime + 0.1; return; }
+    while (nextNoteTime < ctx.currentTime + 0.25) {
+      playStep(step, nextNoteTime);
+      // swing: odd 16ths late
+      const swing = step % 2 === 1 ? 0.06 * SPB : -0.06 * SPB;
+      nextNoteTime += SPB / 4 + (step % 2 === 0 ? 0.06 * SPB : -0.06 * SPB);
+      step = (step + 1) % 128; // 8 bars * 16
+      if (step === 0 && Math.random() < 0.5) makeMelody();
+    }
+  }
+
+  function playStep(s, t) {
+    const bar = Math.floor(s / 16), beat16 = s % 16, chord = CHORDS[bar % CHORDS.length];
+    const night = mood === 'night';
+    // chords: on beat 1, "and" of 2, beat 4 (sparser at night)
+    if (beat16 === 0 || beat16 === 6 || (beat16 === 12 && !night)) rhodesChord(chord.notes, t, beat16 === 0 ? 0.5 : 0.35);
+    // bass
+    if (beat16 === 0 || beat16 === 10) bass(freq(chord.root, -1), t, beat16 === 0 ? 1.2 : 0.7);
+    // drums (softer at night)
+    if (!night || bar % 2 === 0) {
+      if (beat16 === 0 || beat16 === 8 || (beat16 === 14 && bar % 2 === 1)) kick(t);
+      if (beat16 === 4 || beat16 === 12) rim(t);
+      if (beat16 % 2 === 0 && !night) hat(t, beat16 % 4 === 0 ? 0.22 : 0.12);
+      if (beat16 % 2 === 1 && Math.random() < 0.25 && !night) hat(t, 0.06);
+    }
+    // melody (every other 8 bars mostly)
+    const mi = s % 32; const n = melodyPattern[mi];
+    if (n >= 0 && (bar >= 2 || night)) lead(freq(PENTA[n], 1), t);
+  }
+
+  function rhodesChord(notes, t, vel) {
+    for (let i = 0; i < notes.length; i++) {
+      const f = freq(notes[i], 0);
+      const g = ctx.createGain();
+      const o1 = ctx.createOscillator(), o2 = ctx.createOscillator();
+      o1.type = 'sine'; o2.type = 'triangle'; o1.frequency.value = f; o2.frequency.value = f * 2.001; o2.detune.value = 6;
+      const g2 = ctx.createGain(); g2.gain.value = 0.18;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(2200, t); lp.frequency.exponentialRampToValueAtTime(700, t + 1.2);
+      const st = t + i * 0.012;
+      g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(vel * 0.16, st + 0.02); g.gain.exponentialRampToValueAtTime(vel * 0.05, st + 0.9); g.gain.exponentialRampToValueAtTime(0.0008, st + 2.4);
+      o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); g.connect(musicBus);
+      o1.start(st); o2.start(st); o1.stop(st + 2.5); o2.stop(st + 2.5);
+    }
+  }
+  function bass(f, t, len) {
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = f;
+    const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f; const g2 = ctx.createGain(); g2.gain.value = 0.15;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.32, t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    o.connect(g); o2.connect(g2); g2.connect(g); g.connect(musicBus); o.start(t); o2.start(t); o.stop(t + len + 0.05); o2.stop(t + len + 0.05);
+  }
+  function kick(t) {
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine';
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    o.connect(g); g.connect(musicBus); o.start(t); o.stop(t + 0.3);
+  }
+  function hat(t, vel) {
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
+    const g = ctx.createGain(); g.gain.setValueAtTime(vel, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    s.connect(hp); hp.connect(g); g.connect(musicBus); s.start(t, Math.random()); s.stop(t + 0.06);
+  }
+  function rim(t) {
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1900; bp.Q.value = 1.2;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    s.connect(bp); bp.connect(g); g.connect(musicBus); s.start(t, Math.random()); s.stop(t + 0.1);
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 820; const g2 = ctx.createGain(); g2.gain.setValueAtTime(0.12, t); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.04); o.connect(g2); g2.connect(musicBus); o.start(t); o.stop(t + 0.05);
+  }
+  function lead(f, t) {
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o.frequency.value = f;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.11, t + 0.015); g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    o.connect(lp); lp.connect(g); g.connect(musicBus); g.connect(delay); o.start(t); o.stop(t + 0.55);
+  }
+
+  // ---- sound effects ----------------------------------------------------------------
+  function tone(type, f0, f1, dur, vol, t0) {
+    const t = t0 || ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain(); o.type = type;
+    o.frequency.setValueAtTime(f0, t); if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(sfxBus); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function noise(dur, vol, filt, f0, f1, t0) {
+    const t = t0 || ctx.currentTime, s = ctx.createBufferSource(); s.buffer = noiseBuf;
+    const fl = ctx.createBiquadFilter(); fl.type = filt; fl.frequency.setValueAtTime(f0, t); if (f1) fl.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(sfxBus); s.start(t, Math.random()); s.stop(t + dur + 0.02);
+  }
+  const SFX = {
+    tap: () => tone('square', 700, 900, 0.05, 0.05),
+    blip: () => tone('sine', 900, 1300, 0.07, 0.08),
+    back: () => tone('sine', 700, 400, 0.08, 0.06),
+    plant: () => { tone('triangle', 320, 240, 0.12, 0.12); noise(0.08, 0.1, 'lowpass', 600); },
+    hoe: () => { noise(0.14, 0.25, 'lowpass', 900, 300); tone('sine', 120, 60, 0.1, 0.2); },
+    water: () => noise(0.35, 0.18, 'bandpass', 1400, 600),
+    harvest: () => { const t = ctx.currentTime; tone('triangle', 520, 0, 0.1, 0.1, t); tone('triangle', 660, 0, 0.1, 0.1, t + 0.07); tone('triangle', 880, 0, 0.16, 0.1, t + 0.14); },
+    coin: () => { const t = ctx.currentTime; tone('sine', 1100, 0, 0.08, 0.12, t); tone('sine', 1500, 0, 0.16, 0.12, t + 0.07); },
+    pour: () => { noise(0.6, 0.16, 'lowpass', 400, 1800); },
+    steam: () => noise(0.5, 0.1, 'highpass', 2500),
+    pop: () => { tone('square', 200 + Math.random() * 300, 80, 0.03, 0.07); },
+    error: () => tone('sawtooth', 160, 120, 0.15, 0.07),
+    sleep: () => { const t = ctx.currentTime; tone('sine', 660, 0, 0.3, 0.1, t); tone('sine', 520, 0, 0.3, 0.1, t + 0.25); tone('sine', 390, 0, 0.6, 0.1, t + 0.5); },
+    letter: () => { const t = ctx.currentTime; tone('sine', 1046, 0, 0.3, 0.08, t); tone('sine', 1318, 0, 0.3, 0.08, t + 0.12); tone('sine', 1568, 0, 0.5, 0.08, t + 0.24); },
+    splash: () => { noise(0.25, 0.25, 'lowpass', 1200, 300); tone('sine', 300, 120, 0.15, 0.1); },
+    reel: () => { for (let i = 0; i < 5; i++) tone('square', 1200, 900, 0.02, 0.03, ctx.currentTime + i * 0.05); },
+    grind: () => noise(0.5, 0.15, 'bandpass', 500, 900),
+    crank: () => { for (let i = 0; i < 4; i++) noise(0.06, 0.15, 'bandpass', 700, 400, ctx.currentTime + i * 0.12); },
+    cluck: () => { tone('square', 500, 380, 0.08, 0.04); },
+    meow: () => { tone('triangle', 600, 900, 0.18, 0.06); },
+    unlock: () => { const t = ctx.currentTime;[523, 659, 784, 1046].forEach((f, i) => tone('triangle', f, 0, 0.35, 0.09, t + i * 0.09)); },
+    bell: () => { tone('sine', 1760, 1700, 0.5, 0.1); tone('sine', 2637, 2600, 0.3, 0.04); },
+  };
+  A.sfx = function (name) { if (!unlocked || !soundOn) return; const f = SFX[name]; if (f) f(); };
+})();
+
+</script>
+<script>
+/* Cafetal — 30_world.js
+   Map generation, ground/soil/crops, objects & collision, time, weather, seasons. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp } = C.math;
+  const T = C.TILE, MW = C.MAP_W, MH = C.MAP_H;
+  const SP = C.sprites;
+  const W = (C.world = {});
+
+  const G = (C.G = { GRASS: 0, DIRT: 1, WATER: 2, SAND: 3, WOOD: 4, STONE: 5, CONCRETE: 6, PORCH: 7 });
+  W.idx = (x, y) => y * MW + x;
+  W.inMap = (x, y) => x >= 0 && y >= 0 && x < MW && y < MH;
+
+  W.ground = new Uint8Array(MW * MH);
+  W.gvar = new Uint8Array(MW * MH);
+  W.soil = new Uint8Array(MW * MH);      // 0 none, 1 tilled dry, 2 tilled wet
+  W.solid = new Uint8Array(MW * MH);     // static object collision
+  W.crops = new Map();                   // idx -> crop
+  W.forage = new Map();                  // idx -> 'mint' | 'flower'
+  W.objects = [];
+  W.lights = [];                         // {x,y,r,color,flicker}
+  W.farmZone = { x0: 14, y0: 7, x1: 31, y1: 20 };
+  W.forageSpots = [[15, 4], [19, 4], [24, 4], [29, 4], [33, 5], [35, 14], [43, 14], [44, 20], [3, 17], [3, 7], [14, 24], [18, 24], [28, 24], [31, 23], [42, 24], [35, 3], [4, 30], [40, 31]];
+  W.customerSpots = [[22, 28], [24, 28], [20, 28], [26, 29], [18, 29], [28, 28]];
+  W.henZone = { x0: 33, y0: 20, x1: 44, y1: 25 };
+
+  // ---- crop definitions ------------------------------------------------------------
+  C.CROPS = {
+    coffee: { seed: 'coffee_seed', product: 'cherry', stageDays: [0, 1, 2, 4, 5, 6], regrowTo: 3, yieldMin: 3, yieldMax: 5, perennial: true, tall: true },
+    tomato: { seed: 'tomato_seed', product: 'tomato', stageDays: [0, 1, 2, 3, 4], regrowTo: 2, yieldMin: 2, yieldMax: 4, perennial: false },
+    corn: { seed: 'corn_seed', product: 'corn', stageDays: [0, 1, 2, 3, 5], regrowTo: -1, yieldMin: 2, yieldMax: 3, perennial: false, tall: true },
+    sunflower: { seed: 'sunflower_seed', product: 'sunflower', stageDays: [0, 1, 2, 3, 4], regrowTo: -1, yieldMin: 1, yieldMax: 2, perennial: false, tall: true },
+  };
+  W.cropStage = function (crop) {
+    const d = C.CROPS[crop.type].stageDays; let s = 0;
+    for (let i = 0; i < d.length; i++) if (crop.days >= d[i]) s = i;
+    return s;
+  };
+  W.cropRipe = (crop) => W.cropStage(crop) === C.CROPS[crop.type].stageDays.length - 1;
+
+  // ---- helpers -----------------------------------------------------------------------
+  W.season = () => C.SEASONS[C.state.time.season];
+  W.isFarm = (x, y) => { const f = W.farmZone; return x >= f.x0 && x <= f.x1 && y >= f.y0 && y <= f.y1 && W.ground[W.idx(x, y)] === G.GRASS; };
+  W.blocked = function (x, y) {
+    if (!W.inMap(x, y)) return true;
+    const i = W.idx(x, y);
+    if (W.solid[i]) return true;
+    const g = W.ground[i];
+    if (g === G.WATER) return true;
+    const c = W.crops.get(i);
+    if (c && C.CROPS[c.type].tall && W.cropStage(c) >= 2) return true;
+    return false;
+  };
+  W.walkable = (x, y) => !W.blocked(x, y);
+
+  function setGround(x, y, g) { if (W.inMap(x, y)) W.ground[W.idx(x, y)] = g; }
+  function markSolid(x, y, w, h) { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (W.inMap(i, j)) W.solid[W.idx(i, j)] = 1; }
+
+  // Object factory. px/py = pixel draw position; baseY = pixel y used for painter sorting.
+  function addObj(o) {
+    o.id = C.uid();
+    if (o.px === undefined) o.px = o.tx * T;
+    if (o.py === undefined) o.py = o.ty * T;
+    if (o.baseY === undefined) o.baseY = (o.ty + (o.h || 1)) * T;
+    if (o.solidW) markSolid(o.tx + (o.solidX || 0), o.ty + (o.solidY || 0), o.solidW, o.solidH);
+    W.objects.push(o);
+    return o;
+  }
+  W.addObj = addObj;
+
+  // ---- build --------------------------------------------------------------------------
+  W.build = function () {
+    W.objects.length = 0; W.solid.fill(0); W.lights.length = 0;
+    const seed = 1337;
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      const i = W.idx(x, y);
+      W.ground[i] = G.GRASS;
+      const n = C.noise2(x / 3, y / 3, seed);
+      W.gvar[i] = n < 0.35 ? 0 : n < 0.6 ? 1 : n < 0.85 ? 2 : 3;
+    }
+    // road & paths
+    for (let x = 0; x < MW; x++) { setGround(x, 28, G.DIRT); setGround(x, 29, G.DIRT); }
+    for (let y = 14; y <= 27; y++) setGround(9, y, G.DIRT);
+    for (let x = 9; x <= 40; x++) setGround(x, 22, G.DIRT);
+    for (let y = 22; y <= 27; y++) setGround(37, y, G.DIRT);
+    for (let x = 7; x <= 11; x++) setGround(x, 13, G.PORCH);
+    for (let x = 20; x <= 24; x++) setGround(x, 25, G.STONE);
+    for (let x = 19; x <= 25; x++) setGround(x, 27, G.STONE);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) W.gvar[W.idx(x, y)] = W.ground[W.idx(x, y)] === G.DIRT ? C.hash2(x, y, 5) * 3 | 0 : W.gvar[W.idx(x, y)];
+    // pond
+    for (let y = 4; y <= 14; y++) for (let x = 33; x <= 45; x++) {
+      const dx = (x + 0.5 - 39.5) / 4.6, dy = (y + 0.5 - 9.5) / 3.6, d = dx * dx + dy * dy;
+      if (d <= 1.45 && W.ground[W.idx(x, y)] === G.GRASS) setGround(x, y, G.SAND);
+    }
+    for (let y = 4; y <= 14; y++) for (let x = 33; x <= 45; x++) {
+      const dx = (x + 0.5 - 39.5) / 4.0, dy = (y + 0.5 - 9.5) / 3.0, d = dx * dx + dy * dy;
+      if (d <= 1) setGround(x, y, G.WATER);
+    }
+    // border forest
+    const isRoad = (x, y) => y === 28 || y === 29;
+    const treeAt = (x, y, kind) => addObj({ kind: 'tree', tx: x, ty: y, w: 1, h: 1, seed: (x * 31 + y * 17) | 0, tkind: kind, px: x * T - 4, py: y * T - 16, baseY: (y + 1) * T, solidW: 1, solidH: 1 });
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      if (isRoad(x, y)) continue;
+      const edge = y <= 2 || y >= 33 || x <= 1 || x >= 46;
+      const fringe = y === 3 || y === 32 || x === 2 || x === 45;
+      const h = C.hash2(x, y, 9);
+      if (edge || (fringe && h < 0.45)) {
+        if (W.ground[W.idx(x, y)] !== G.GRASS) continue;
+        if (edge && h < 0.18) continue; // gaps in the deep forest look natural
+        treeAt(x, y, h > 0.8 ? 'pine' : 'leaf');
+      }
+    }
+    for (const [x, y, k] of [[16, 4, 'leaf'], [30, 5, 'pine'], [33, 24, 'leaf'], [44, 17, 'leaf'], [3, 25, 'pine'], [4, 9, 'leaf'], [14, 30, 'leaf'], [31, 31, 'pine'], [42, 31, 'leaf'], [4, 15, 'leaf'], [22, 31, 'leaf'], [45, 24, 'pine'], [12, 4, 'pine'], [26, 3, 'leaf']]) treeAt(x, y, k);
+
+    // house (7x7 sprite at tiles 6,6; footprint rows 8..12)
+    addObj({ kind: 'house', tx: 6, ty: 6, w: 7, h: 7, solidX: 0, solidY: 2, solidW: 7, solidH: 5, interact: 'house', stand: [9, 13], name: 'house', baseY: 13 * T });
+    // shed with roaster (5x5 at 5,15; footprint rows 17..19)
+    addObj({ kind: 'shed', tx: 5, ty: 15, w: 5, h: 5, solidX: 0, solidY: 2, solidW: 5, solidH: 3, interact: 'roaster', stand: [7, 20], name: 'roaster', baseY: 20 * T });
+    // pulper
+    addObj({ kind: 'pulper', tx: 12, ty: 20, w: 1, h: 1, py: 20 * T - 8, solidW: 1, solidH: 1, interact: 'pulper', stand: [12, 21], name: 'pulper' });
+    // patio (6x4 at 34,16)
+    addObj({ kind: 'patio', tx: 34, ty: 16, w: 6, h: 4, py: 16 * T - 16, solidW: 6, solidH: 4, interact: 'patio', stand: [36, 20], name: 'patio' });
+    // café counter (5x3 at 20,25; rows 26..27 solid)
+    addObj({ kind: 'counter', tx: 20, ty: 25, w: 5, h: 3, solidX: 0, solidY: 1, solidW: 5, solidH: 2, interact: 'counter', stand: [22, 25], name: 'cafe' });
+    // Rosa's cart (3x3 at 36,25; rows 26..27 solid)
+    addObj({ kind: 'cart', tx: 36, ty: 25, w: 3, h: 3, solidX: 0, solidY: 1, solidW: 3, solidH: 2, interact: 'shop', stand: [37, 28], name: 'shop' });
+    // mailbox
+    addObj({ kind: 'mailbox', tx: 11, ty: 14, w: 1, h: 1, py: 14 * T - 8, solidW: 1, solidH: 1, interact: 'mailbox', stand: [10, 14], name: 'mailbox' });
+    // well
+    addObj({ kind: 'well', tx: 4, ty: 24, w: 2, h: 2, py: 24 * T - 8, solidW: 2, solidH: 2 });
+    // sign by the counter
+    addObj({ kind: 'sign', tx: 19, ty: 26, w: 1, h: 1, py: 26 * T - 8, solidW: 1, solidH: 1 });
+    // lanterns along the road
+    for (const x of [17, 27, 34, 43, 6]) { addObj({ kind: 'lantern', tx: x, ty: 27, w: 1, h: 1, py: 27 * T - 8, solidW: 1, solidH: 1 }); W.lights.push({ x: x * T + 8, y: 27 * T + 4, r: 34, color: '#ffcc66', kind: 'lantern' }); }
+    // flower pots by the porch
+    addObj({ kind: 'pot', tx: 6, ty: 13, w: 1, h: 1, seed: 3 }); addObj({ kind: 'pot', tx: 12, ty: 13, w: 1, h: 1, seed: 8 });
+    // fences around the farm
+    const fz = W.farmZone;
+    const fence = (x, y, k) => { if (W.ground[W.idx(x, y)] !== G.GRASS) return; addObj({ kind: 'fence', fk: k, tx: x, ty: y, w: 1, h: 1, solidW: 1, solidH: 1 }); };
+    for (let x = fz.x0 - 1; x <= fz.x1 + 1; x++) { if (x !== 21 && x !== 22 && x !== 23) fence(x, fz.y1 + 1, 'h'); if (x !== 22 && x !== 23) fence(x, fz.y0 - 1, 'h'); }
+    for (let y = fz.y0; y <= fz.y1; y++) { if (y !== 13 && y !== 14) fence(fz.x0 - 1, y, 'v'); if (y !== 13 && y !== 14) fence(fz.x1 + 1, y, 'v'); }
+    // bushes & rocks & decoration flowers
+    const r = C.rng(4242);
+    for (let i = 0; i < 40; i++) {
+      const x = 2 + r.int(MW - 4), y = 3 + r.int(MH - 6);
+      if (!freeGrass(x, y)) continue;
+      const k = r();
+      if (k < 0.35) addObj({ kind: 'bush', tx: x, ty: y, w: 1, h: 1, seed: r.int(999), solidW: 1, solidH: 1 });
+      else if (k < 0.55) addObj({ kind: 'rock', tx: x, ty: y, w: 1, h: 1, seed: r.int(999), solidW: 1, solidH: 1 });
+      else if (k < 0.7) addObj({ kind: 'stump', tx: x, ty: y, w: 1, h: 1, solidW: 1, solidH: 1 });
+      else addObj({ kind: 'dflower', tx: x, ty: y, w: 1, h: 1, seed: r.int(999) });
+    }
+    // reeds and lilies around the pond
+    for (let y = 4; y <= 14; y++) for (let x = 33; x <= 45; x++) {
+      const g = W.ground[W.idx(x, y)], hh = C.hash2(x, y, 21);
+      if (g === G.SAND && hh < 0.25) addObj({ kind: 'reeds', tx: x, ty: y, w: 1, h: 1 });
+      if (g === G.WATER && hh > 0.8) addObj({ kind: 'lily', tx: x, ty: y, w: 1, h: 1 });
+    }
+    // house lights
+    W.lights.push({ x: 6 * T + 21, y: 6 * T + 64, r: 26, color: '#ffd080', kind: 'window' }, { x: 6 * T + 91, y: 6 * T + 64, r: 26, color: '#ffd080', kind: 'window' },
+      { x: 6 * T + 21, y: 6 * T + 86, r: 26, color: '#ffd080', kind: 'window' }, { x: 6 * T + 91, y: 6 * T + 86, r: 26, color: '#ffd080', kind: 'window' },
+      { x: 6 * T + 72, y: 6 * T + 68, r: 30, color: '#ffe0a0', kind: 'porch' },
+      { x: 5 * T + 40, y: 15 * T + 62, r: 28, color: '#ff9a40', kind: 'roaster' },
+      { x: 22 * T + 8, y: 26 * T, r: 44, color: '#ffd8a0', kind: 'cafe' },
+      { x: 37 * T + 8, y: 26 * T, r: 30, color: '#ffd8a0', kind: 'cart' });
+    W.rebuildUpgrades();
+  };
+  function freeGrass(x, y) {
+    if (!W.inMap(x, y) || W.solid[W.idx(x, y)] || W.ground[W.idx(x, y)] !== G.GRASS) return false;
+    if (W.isFarm(x, y)) return false;
+    const fz = W.farmZone; if (x >= fz.x0 - 1 && x <= fz.x1 + 1 && y >= fz.y0 - 1 && y <= fz.y1 + 1) return false;
+    if (y >= 21 && y <= 30 && x >= 8 && x <= 41) return false; // keep the lane and road area clear
+    if (x >= 5 && x <= 13 && y >= 5 && y <= 15) return false;   // house yard
+    if (x >= 4 && x <= 13 && y >= 15 && y <= 21) return false;  // shed
+    if (x >= 33 && x <= 45 && y >= 3 && y <= 15) return false;  // pond
+    if (x >= 33 && x <= 40 && y >= 15 && y <= 20) return false; // patio
+    if (W.forageSpots.some(([fx, fy]) => fx === x && fy === y)) return false;
+    return true;
+  }
+
+  // Upgrade-dependent objects are (re)built when purchases change.
+  W.rebuildUpgrades = function () {
+    W.objects = W.objects.filter((o) => !o.upgrade);
+    const up = C.state.upgrades;
+    // clear solid for upgrade footprints then re-mark
+    for (const [x, y, w, h] of [[41, 21, 2, 2], [14, 23, 2, 1]]) for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) W.solid[W.idx(i, j)] = 0;
+    if (up.hens) addObj({ kind: 'coop', upgrade: true, tx: 41, ty: 21, w: 2, h: 2, py: 21 * T - 8, solidW: 2, solidH: 2, interact: 'coop', name: 'coop' });
+    if (up.bench) addObj({ kind: 'bench', upgrade: true, tx: 14, ty: 23, w: 2, h: 1, solidW: 2, solidH: 1 });
+    W.lights = W.lights.filter((l) => l.kind !== 'fairy');
+    if (up.lights) for (let i = 0; i < 5; i++) W.lights.push({ x: 20 * T + 8 + i * 16, y: 25 * T + 2, r: 16, color: ['#ffd060', '#ff8080', '#80e0ff', '#c0ff80', '#ffd060'][i], kind: 'fairy' });
+  };
+
+  // ---- interaction lookup -----------------------------------------------------------------
+  W.objectAt = function (tx, ty) {
+    for (let i = W.objects.length - 1; i >= 0; i--) {
+      const o = W.objects[i];
+      if (tx >= o.tx && tx < o.tx + o.w && ty >= o.ty && ty < o.ty + o.h) return o;
+    }
+    return null;
+  };
+  W.interactableAt = function (tx, ty) {
+    // Prefer objects with an interact type, including their full sprite footprint.
+    for (let i = W.objects.length - 1; i >= 0; i--) {
+      const o = W.objects[i];
+      if (!o.interact) continue;
+      if (tx >= o.tx && tx < o.tx + o.w && ty >= o.ty && ty < o.ty + o.h) return o;
+    }
+    return null;
+  };
+  // nearest walkable neighbour of a tile (for objects without a stand spot)
+  W.nearestStand = function (tx, ty, fromX, fromY) {
+    let best = null, bd = 1e9;
+    for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const x = tx + dx, y = ty + dy;
+      if (!W.walkable(x, y)) continue;
+      const d = Math.abs(x - fromX) + Math.abs(y - fromY);
+      if (d < bd) { bd = d; best = [x, y]; }
+    }
+    return best;
+  };
+
+  // ---- time & weather ------------------------------------------------------------------------
+  W.tick = function (dt) {
+    const t = C.state.time;
+    t.hour += dt * ((C.DAY_END_HOUR - C.DAY_START_HOUR) / C.DAY_SECONDS);
+    if (t.hour >= C.DAY_END_HOUR) { t.hour = C.DAY_END_HOUR; C.emit('midnight'); }
+  };
+  W.daylight = function () { // 0 night .. 1 full day
+    const h = C.state.time.hour;
+    if (h < 6) return 0.3;
+    if (h < 7.5) return 0.3 + 0.7 * (h - 6) / 1.5;
+    if (h < 17.5) return 1;
+    if (h < 20.5) return 1 - (h - 17.5) / 3;
+    return 0;
+  };
+  W.rollWeather = function (seasonIdx, rnd) {
+    const r = rnd();
+    switch (C.SEASONS[seasonIdx]) {
+      case 'spring': return r < 0.42 ? 'clear' : r < 0.62 ? 'cloudy' : 'rain';
+      case 'summer': return r < 0.6 ? 'clear' : r < 0.78 ? 'cloudy' : 'rain';
+      case 'autumn': return r < 0.4 ? 'clear' : r < 0.68 ? 'cloudy' : 'rain';
+      default: return r < 0.35 ? 'clear' : r < 0.6 ? 'cloudy' : 'snow';
+    }
+  };
+  W.isRaining = () => C.state.weather === 'rain';
+
+  // Morning: advance day, weather, crops, forage. Emits 'newDay'.
+  W.newDay = function () {
+    const S = C.state, t = S.time;
+    t.day += 1; t.hour = C.DAY_START_HOUR;
+    const seasonBefore = t.season;
+    t.season = Math.floor((t.day - 1) / C.SEASON_DAYS) % 4;
+    t.year = Math.floor((t.day - 1) / (C.SEASON_DAYS * 4)) + 1;
+    const newSeason = seasonBefore !== t.season;
+    S.weather = S.forecast || W.rollWeather(t.season, Math.random);
+    S.forecast = W.rollWeather(t.season, Math.random);
+    if (t.day === 2) S.weather = 'clear';
+    const winter = W.season() === 'winter';
+    if (newSeason && winter) { // annual crops wither at first frost
+      for (const [i, c] of [...W.crops]) if (!C.CROPS[c.type].perennial) W.crops.delete(i);
+    }
+    const rain = S.weather === 'rain';
+    // crops grow if they were watered yesterday (or rain today counts for today, applied now for simplicity)
+    for (const [i, c] of W.crops) {
+      const grew = c.watered || W.soil[i] === 2;
+      if (grew && !(winter && c.type === 'coffee')) c.days += 1;
+      c.watered = false;
+    }
+    // soil dries, then rain / sprinkler wet it again
+    for (let i = 0; i < W.soil.length; i++) if (W.soil[i] === 2) W.soil[i] = 1;
+    if (rain || S.upgrades.sprinkler) {
+      for (let i = 0; i < W.soil.length; i++) if (W.soil[i] === 1) W.soil[i] = 2;
+      for (const [, c] of W.crops) c.watered = true;
+    }
+    // forage respawn
+    if (!winter) for (const [x, y] of W.forageSpots) { const i = W.idx(x, y); if (!W.forage.has(i) && Math.random() < 0.35) W.forage.set(i, Math.random() < 0.5 ? 'mint' : 'flower'); }
+    else W.forage.clear();
+    C.emit('newDay', { newSeason });
+  };
+
+  // ---- farming actions ---------------------------------------------------------------------
+  W.till = function (x, y) { if (!W.isFarm(x, y) || W.blocked(x, y) || W.soil[W.idx(x, y)]) return false; W.soil[W.idx(x, y)] = 1; return true; };
+  W.water = function (x, y) { const i = W.idx(x, y); if (!W.soil[i]) return false; W.soil[i] = 2; const c = W.crops.get(i); if (c) c.watered = true; return true; };
+  W.plant = function (x, y, type) { const i = W.idx(x, y); if (!W.soil[i] || W.crops.has(i)) return false; W.crops.set(i, { type, days: 0, watered: W.soil[i] === 2 }); return true; };
+  W.harvest = function (x, y) {
+    const i = W.idx(x, y), c = W.crops.get(i); if (!c || !W.cropRipe(c)) return null;
+    const def = C.CROPS[c.type], n = def.yieldMin + Math.floor(Math.random() * (def.yieldMax - def.yieldMin + 1));
+    if (def.regrowTo >= 0) { c.days = def.stageDays[def.regrowTo]; c.watered = W.soil[i] === 2; } else W.crops.delete(i);
+    return { item: def.product, n };
+  };
+})();
+
+</script>
+<script>
+/* Cafetal — 40_entities.js
+   Player, NPC customers, Rosa, cat, hens. A* pathfinding on the tile grid. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp, lerp } = C.math;
+  const T = C.TILE, MW = C.MAP_W, MH = C.MAP_H;
+  const W = C.world, SP = C.sprites;
+  const E = (C.entities = { player: null, npcs: [], animals: [], rosa: null, cat: null });
+
+  // ---- A* --------------------------------------------------------------------------------
+  C.pathfind = function (sx, sy, tx, ty, allowTarget) {
+    if (sx === tx && sy === ty) return [];
+    if (!W.inMap(tx, ty)) return null;
+    const passable = (x, y) => W.walkable(x, y) || (allowTarget && x === tx && y === ty);
+    if (!passable(tx, ty)) return null;
+    const open = [], came = new Map(), gS = new Map();
+    const key = (x, y) => y * MW + x, h = (x, y) => Math.abs(x - tx) + Math.abs(y - ty);
+    const sk = key(sx, sy);
+    open.push({ x: sx, y: sy, f: h(sx, sy) }); gS.set(sk, 0);
+    const closed = new Set();
+    let iter = 0;
+    while (open.length && iter++ < 6000) {
+      let bi = 0; for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
+      const cur = open.splice(bi, 1)[0];
+      const ck = key(cur.x, cur.y);
+      if (cur.x === tx && cur.y === ty) {
+        const path = []; let k = ck;
+        while (k !== sk) { path.push([k % MW, Math.floor(k / MW)]); k = came.get(k); }
+        return path.reverse();
+      }
+      if (closed.has(ck)) continue; closed.add(ck);
+      const g0 = gS.get(ck);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cur.x + dx, ny = cur.y + dy;
+        if (!W.inMap(nx, ny) || !passable(nx, ny)) continue;
+        const nk = key(nx, ny); if (closed.has(nk)) continue;
+        const g = g0 + 1;
+        if (g < (gS.has(nk) ? gS.get(nk) : 1e9)) { gS.set(nk, g); came.set(nk, ck); open.push({ x: nx, y: ny, f: g + h(nx, ny) }); }
+      }
+    }
+    return null;
+  };
+
+  // ---- generic mover -----------------------------------------------------------------------
+  function makeMover(tx, ty, speed) {
+    return { x: tx * T + 8, y: ty * T + 16, tx, ty, dir: 0, frame: 0, animT: 0, path: null, speed, onArrive: null, moving: false, bubble: null, bubbleT: 0 };
+  }
+  function tileOf(m) { return [Math.floor(m.x / T), Math.floor((m.y - 1) / T)]; }
+  E.tileOf = tileOf;
+
+  E.moveTo = function (m, tx, ty, onArrive, allowTarget) {
+    const [cx, cy] = tileOf(m);
+    const path = C.pathfind(cx, cy, tx, ty, allowTarget);
+    if (!path) { m.path = null; m.onArrive = null; return false; }
+    m.path = path.length ? path : null; m.onArrive = onArrive || null;
+    if (!m.path && m.onArrive) { const f = m.onArrive; m.onArrive = null; f(); }
+    return true;
+  };
+  E.stop = function (m) { m.path = null; m.onArrive = null; m.moving = false; };
+
+  E.updateMover = function (m, dt) {
+    if (m.bubble) { m.bubbleT -= dt; if (m.bubbleT <= 0) m.bubble = null; }
+    if (!m.path || m.path.length === 0) {
+      m.moving = false; m.animT = 0; m.frame = 0; m.path = null;
+      if (m.onArrive) { const f = m.onArrive; m.onArrive = null; f(); }
+      return;
+    }
+    const [nx, ny] = m.path[0];
+    const gx = nx * T + 8, gy = ny * T + 16;
+    const dx = gx - m.x, dy = gy - m.y, d = Math.hypot(dx, dy);
+    const stepLen = m.speed * dt;
+    if (Math.abs(dx) > Math.abs(dy)) m.dir = dx > 0 ? 2 : 1; else m.dir = dy > 0 ? 0 : 3;
+    m.moving = true; m.animT += dt;
+    m.frame = 1 + (Math.floor(m.animT * 7) % 2);
+    if (d <= stepLen) {
+      m.x = gx; m.y = gy; m.tx = nx; m.ty = ny; m.path.shift();
+      if (m.path.length === 0) { m.moving = false; m.frame = 0; if (m.onArrive) { const f = m.onArrive; m.onArrive = null; m.path = null; f(); } }
+    } else { m.x += (dx / d) * stepLen; m.y += (dy / d) * stepLen; }
+  };
+
+  // ---- player -------------------------------------------------------------------------------
+  E.initPlayer = function (tx, ty) {
+    const p = makeMover(tx, ty, 78);
+    p.kind = 'player'; p.look = SP.PLAYER;
+    E.player = p;
+    return p;
+  };
+  E.say = function (m, text, secs) { m.bubble = text; m.bubbleT = secs || 3; };
+
+  // ---- Rosa (vendor) -------------------------------------------------------------------------
+  E.initStatics = function () {
+    E.rosa = { kind: 'rosa', x: 37 * T + 8, y: 24 * T + 16, dir: 0, frame: 0, look: SP.ROSA, bubble: null, bubbleT: 0, idle: 0 };
+    E.cat = { kind: 'cat', x: 11 * T + 8, y: 13 * T + 14, frame: 0, t: 0, bubble: null, bubbleT: 0 };
+    E.animals = [];
+    if (C.state.upgrades.hens) E.spawnHens();
+  };
+  E.spawnHens = function () {
+    E.animals = E.animals.filter((a) => a.kind !== 'hen');
+    for (let i = 0; i < 3; i++) {
+      const h = makeMover(35 + i * 3, 23, 22); h.kind = 'hen'; h.wait = Math.random() * 3; h.dirX = 0; E.animals.push(h);
+    }
+  };
+
+  // ---- customers -----------------------------------------------------------------------------
+  // npc: {def, state:'arrive'|'wait'|'leave'|'pass', order, patience, spot}
+  E.spawnCustomer = function (def, order, passOnly) {
+    const startX = Math.random() < 0.6 ? MW - 1 : 0;
+    const m = makeMover(startX, 28, 44 + Math.random() * 10);
+    m.kind = 'npc'; m.def = def; m.look = { skin: def.skin, hair: def.hair, shirt: def.shirt, pants: def.pants, hat: def.hat };
+    m.order = order; m.state = passOnly ? 'pass' : 'arrive'; m.patience = 0; m.waited = 0; m.served = false;
+    E.npcs.push(m);
+    if (passOnly) {
+      const endX = startX === 0 ? MW - 1 : 0;
+      E.moveTo(m, endX, 28 + (Math.random() < 0.5 ? 0 : 1), () => { m.dead = true; });
+      if (Math.random() < 0.5) E.say(m, C.npcLine(def.lines[Math.floor(Math.random() * def.lines.length)]), 4);
+      return m;
+    }
+    // choose a free queue spot
+    const taken = new Set(E.npcs.filter((n) => n !== m && n.spot).map((n) => n.spot.join(',')));
+    let spot = W.customerSpots.find((s) => !taken.has(s.join(','))) || W.customerSpots[W.customerSpots.length - 1];
+    m.spot = spot;
+    const ok = E.moveTo(m, spot[0], spot[1], () => {
+      m.state = 'wait'; m.dir = 3; m.patience = 55 + (C.state.upgrades.lights ? 30 : 0) + Math.random() * 15;
+      const lines = C.NPC_LINES.generic_order;
+      E.say(m, C.npcLine(lines[Math.floor(Math.random() * lines.length)]).replace('{drink}', C.t('drink_' + order)), 5);
+      C.audio.sfx('bell');
+    });
+    if (!ok) { m.dead = true; }
+    return m;
+  };
+  E.leaveCustomer = function (m, line) {
+    m.state = 'leave'; m.spot = null;
+    if (line) E.say(m, line, 3.5);
+    const endX = Math.random() < 0.5 ? MW - 1 : 0;
+    const ok = E.moveTo(m, endX, 28 + (Math.random() < 0.5 ? 0 : 1), () => { m.dead = true; });
+    if (!ok) m.dead = true;
+  };
+  E.waitingCustomers = () => E.npcs.filter((n) => n.state === 'wait');
+  E.customerAt = function (tx, ty) { return E.npcs.find((n) => !n.dead && Math.abs(n.tx - tx) <= 0 && Math.abs(n.ty - ty) <= 0 && n.state !== 'pass') || E.npcs.find((n) => !n.dead && n.state === 'wait' && Math.abs(n.tx - tx) <= 1 && Math.abs(n.ty - ty) <= 1); };
+
+  // ---- update all --------------------------------------------------------------------------
+  E.update = function (dt) {
+    E.updateMover(E.player, dt);
+    for (const n of E.npcs) {
+      E.updateMover(n, dt);
+      if (n.state === 'wait') {
+        n.waited += dt;
+        if (n.waited > n.patience) {
+          E.leaveCustomer(n, C.npcLine(C.NPC_LINES.tired[0]));
+          C.emit('customerLeft', n);
+        }
+      }
+    }
+    E.npcs = E.npcs.filter((n) => !n.dead);
+    // rosa idle
+    if (E.rosa) { E.rosa.bubbleT -= dt; if (E.rosa.bubbleT <= 0) E.rosa.bubble = null; }
+    // cat
+    if (E.cat) { E.cat.t += dt; if (E.cat.t > 9) { E.cat.t = 0; E.cat.frame = E.cat.frame ? 0 : 1; } E.cat.bubbleT -= dt; if (E.cat.bubbleT <= 0) E.cat.bubble = null; }
+    // hens
+    for (const h of E.animals) {
+      if (h.kind !== 'hen') continue;
+      if (!h.path || h.path.length === 0) {
+        h.wait -= dt;
+        if (h.wait <= 0) {
+          h.wait = 1.5 + Math.random() * 4;
+          const z = W.henZone, tx = z.x0 + Math.floor(Math.random() * (z.x1 - z.x0 + 1)), ty = z.y0 + Math.floor(Math.random() * (z.y1 - z.y0 + 1));
+          if (W.walkable(tx, ty) && Math.random() < 0.7) E.moveTo(h, tx, ty);
+          else if (Math.random() < 0.15) C.audio.sfx('cluck');
+        }
+      }
+      E.updateMover(h, dt);
+    }
+  };
+
+  // Everything drawable with a base y for painter sorting.
+  E.drawables = function () {
+    const out = [];
+    const p = E.player;
+    out.push({ baseY: p.y, draw: (g, ox, oy) => drawHuman(g, p, ox, oy) });
+    for (const n of E.npcs) out.push({ baseY: n.y, draw: (g, ox, oy) => drawHuman(g, n, ox, oy) });
+    if (E.rosa) out.push({ baseY: E.rosa.y, draw: (g, ox, oy) => drawHuman(g, E.rosa, ox, oy) });
+    if (E.cat && C.state.upgrades.cat) out.push({ baseY: E.cat.y, draw: (g, ox, oy) => g.drawImage(SP.cat(E.cat.frame), Math.round(E.cat.x - 8 - ox), Math.round(E.cat.y - 12 - oy)) });
+    for (const h of E.animals) out.push({ baseY: h.y, draw: (g, ox, oy) => g.drawImage(SP.chicken(h.frame ? 1 : 0, h.dir === 1 ? 1 : 0), Math.round(h.x - 6 - ox), Math.round(h.y - 12 - oy)) });
+    return out;
+  };
+  function drawHuman(g, m, ox, oy) {
+    const img = SP.humanoid(m.look, m.dir, m.frame);
+    // soft shadow
+    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(Math.round(m.x - 5 - ox), Math.round(m.y - 2 - oy), 10, 2);
+    g.drawImage(img, Math.round(m.x - 8 - ox), Math.round(m.y - 20 - oy));
+  }
+})();
+
+</script>
+<script>
+/* Cafetal — 50_stations.js
+   Pulper, drying patio, roaster mini-game, recipes and brewing. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp } = C.math;
+  const ST = (C.stations = {});
+
+  C.RECIPES = {
+    espresso: { needs: { roast_dark: 1 }, price: 18, rep: 0 },
+    americano: { needs: { roast_medium: 1 }, price: 16, rep: 0 },
+    latte: { needs: { roast_medium: 1, milk: 1 }, price: 26, rep: 0 },
+    cappuccino: { needs: { roast_dark: 1, milk: 1 }, price: 28, rep: 10 },
+    olla: { needs: { roast_dark: 1, panela: 1, cinnamon: 1 }, price: 32, rep: 20 },
+    cold_brew: { needs: { roast_light: 2 }, price: 30, rep: 35 },
+    mocha: { needs: { roast_dark: 1, milk: 1, cocoa: 1 }, price: 38, rep: 50 },
+    mint_tea: { needs: { mint: 1, panela: 1 }, price: 20, rep: 70 },
+  };
+  ST.unlockedRecipes = () => Object.keys(C.RECIPES).filter((id) => C.state.rep >= C.RECIPES[id].rep);
+  ST.missingFor = function (id) {
+    const inv = C.state.inventory, out = [];
+    for (const it in C.RECIPES[id].needs) { const need = C.RECIPES[id].needs[it], have = inv[it] || 0; if (have < need) out.push({ item: it, n: need - have }); }
+    return out;
+  };
+  ST.brew = function (id) {
+    if (ST.missingFor(id).length) return false;
+    for (const it in C.RECIPES[id].needs) C.econ.remove(it, C.RECIPES[id].needs[it]);
+    return true;
+  };
+
+  // ---- pulper -----------------------------------------------------------------------------
+  ST.pulp = function () {
+    const n = C.econ.count('cherry');
+    if (!n) return 0;
+    C.econ.remove('cherry', n); C.econ.add('parchment', n);
+    return n;
+  };
+
+  // ---- patio ------------------------------------------------------------------------------
+  ST.patioCap = () => (C.state.upgrades.patio2 ? 40 : 20);
+  ST.DRY_DAYS = 2;
+  // returns {action:'collect'|'load'|'full'|'empty'|'none', n}
+  ST.patioInteract = function () {
+    const p = C.state.patio, cap = ST.patioCap();
+    if (p.n > 0 && p.dry) { const n = p.n; C.econ.add('green', n); p.n = 0; p.days = 0; p.dry = false; return { action: 'collect', n }; }
+    const have = C.econ.count('parchment');
+    const room = cap - p.n;
+    if (have > 0 && room > 0) { const n = Math.min(have, room); C.econ.remove('parchment', n); p.n += n; return { action: 'load', n }; }
+    if (have > 0 && room <= 0) return { action: 'full', n: 0 };
+    if (p.n > 0) return { action: 'status', n: p.n };
+    return { action: 'empty', n: 0 };
+  };
+  C.on('newDay', () => {
+    const p = C.state.patio;
+    if (p.n > 0 && !p.dry) {
+      const raining = C.state.weather === 'rain' || C.state.weather === 'snow';
+      if (!raining || C.state.upgrades.roof) { p.days += 1; if (p.days >= ST.DRY_DAYS) p.dry = true; }
+    }
+  });
+
+  // ---- roaster ------------------------------------------------------------------------------
+  ST.roastCap = () => (C.state.upgrades.roaster2 ? 20 : 10);
+  ST.ROAST_WINDOWS = { light: [0.30, 0.44], medium: [0.52, 0.66], dark: [0.72, 0.86] };
+  ST.ROAST_DURATION = 5.2; // seconds of holding to reach 1.0
+  ST.roast = null;
+  ST.startRoast = function (level) {
+    const n = Math.min(C.econ.count('green'), ST.roastCap());
+    if (n <= 0) return null;
+    C.econ.remove('green', n);
+    ST.roast = { level, n, t: 0, holding: false, done: false, result: null, popT: 0 };
+    return ST.roast;
+  };
+  ST.updateRoast = function (dt) {
+    const r = ST.roast; if (!r || r.done) return;
+    if (r.holding) {
+      r.t = clamp(r.t + dt / ST.ROAST_DURATION, 0, 1);
+      r.popT -= dt;
+      if (r.t > 0.35 && r.popT <= 0) { r.popT = 0.08 + Math.random() * 0.25 * (1.2 - r.t); C.audio.sfx('pop'); }
+      if (r.t >= 1) ST.releaseRoast();
+    }
+  };
+  ST.releaseRoast = function () {
+    const r = ST.roast; if (!r || r.done) return null;
+    r.done = true; r.holding = false;
+    const [a, b] = ST.ROAST_WINDOWS[r.level], mid = (a + b) / 2, half = (b - a) / 2;
+    let grade, yieldN;
+    if (r.t < a) { grade = 'under'; yieldN = Math.max(1, Math.floor(r.n * 0.7)); }
+    else if (r.t <= b) { grade = Math.abs(r.t - mid) <= half * 0.45 ? 'perfect' : 'good'; yieldN = grade === 'perfect' ? r.n + 2 : r.n; }
+    else if (r.t <= b + 0.08) { grade = 'good'; yieldN = r.n; }
+    else { grade = 'burnt'; yieldN = Math.max(1, Math.floor(r.n * 0.4)); }
+    C.econ.add('roast_' + r.level, yieldN);
+    r.result = { grade, n: yieldN };
+    C.state.stats.roasts = (C.state.stats.roasts || 0) + 1;
+    if (grade === 'perfect') C.state.stats.perfectRoasts = (C.state.stats.perfectRoasts || 0) + 1;
+    return r.result;
+  };
+  // bean colour along the roast bar
+  ST.roastColor = function (t) {
+    const stops = [[0, '#9fbf6a'], [0.25, '#c9b06a'], [0.4, '#b98a4a'], [0.58, '#8a5a30'], [0.78, '#4a2e1e'], [0.9, '#2a1a10'], [1, '#111']];
+    for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) { const [t0, c0] = stops[i - 1], [t1, c1] = stops[i]; return C.color.mix(c0, c1, (t - t0) / (t1 - t0)); }
+    return '#111';
+  };
+
+  // ---- fishing ---------------------------------------------------------------------------------
+  ST.fish = null;
+  ST.startFishing = function () { ST.fish = { t: 0, bite: 1.2 + Math.random() * 3.2, window: 0.75, state: 'wait', result: null }; return ST.fish; };
+  ST.updateFishing = function (dt) {
+    const f = ST.fish; if (!f || f.state === 'done') return;
+    f.t += dt;
+    if (f.state === 'wait' && f.t >= f.bite) { f.state = 'bite'; C.audio.sfx('splash'); }
+    if (f.state === 'bite' && f.t >= f.bite + f.window) { f.state = 'done'; f.result = 'missed'; }
+  };
+  ST.tapFishing = function () {
+    const f = ST.fish; if (!f) return null;
+    if (f.state === 'bite') { f.state = 'done'; f.result = 'caught'; C.econ.add('fish', 1); C.audio.sfx('reel'); C.audio.sfx('harvest'); return 'caught'; }
+    if (f.state === 'wait') { f.state = 'done'; f.result = 'missed'; return 'missed'; }
+    return null;
+  };
+})();
+
+</script>
+<script>
+/* Cafetal — 60_economy.js
+   Items, inventory, shop, customers, reputation, letters and tutorial hints. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const E = C.entities, W = C.world;
+  const EC = (C.econ = {});
+
+  C.ITEMS = {
+    coffee_seed: { sell: 0, cat: 'seed', crop: 'coffee' }, tomato_seed: { sell: 0, cat: 'seed', crop: 'tomato' }, corn_seed: { sell: 0, cat: 'seed', crop: 'corn' }, sunflower_seed: { sell: 0, cat: 'seed', crop: 'sunflower' },
+    cherry: { sell: 8, cat: 'coffee' }, parchment: { sell: 10, cat: 'coffee' }, green: { sell: 15, cat: 'coffee' },
+    roast_light: { sell: 25, cat: 'coffee' }, roast_medium: { sell: 25, cat: 'coffee' }, roast_dark: { sell: 25, cat: 'coffee' },
+    tomato: { sell: 12, cat: 'crop' }, corn: { sell: 30, cat: 'crop' }, sunflower: { sell: 25, cat: 'crop' }, egg: { sell: 10, cat: 'crop' }, fish: { sell: 35, cat: 'crop' },
+    milk: { sell: 2, cat: 'pantry' }, panela: { sell: 2, cat: 'pantry' }, cinnamon: { sell: 3, cat: 'pantry' }, cocoa: { sell: 4, cat: 'pantry' },
+    mint: { sell: 6, cat: 'forage' }, flower: { sell: 8, cat: 'forage' },
+  };
+  C.ITEM_ORDER = ['coffee_seed', 'tomato_seed', 'corn_seed', 'sunflower_seed', 'cherry', 'parchment', 'green', 'roast_light', 'roast_medium', 'roast_dark', 'tomato', 'corn', 'sunflower', 'egg', 'fish', 'milk', 'panela', 'cinnamon', 'cocoa', 'mint', 'flower'];
+  C.SHOP = {
+    seeds: [{ id: 'coffee_seed', price: 40 }, { id: 'tomato_seed', price: 8 }, { id: 'corn_seed', price: 12 }, { id: 'sunflower_seed', price: 10 }],
+    pantry: [{ id: 'milk', price: 5 }, { id: 'panela', price: 4 }, { id: 'cinnamon', price: 6 }, { id: 'cocoa', price: 8 }],
+    upgrades: [
+      { id: 'sprinkler', price: 600, icon: 'sprinkler' }, { id: 'roof', price: 350, icon: 'roof' }, { id: 'patio2', price: 300, icon: 'patio2' }, { id: 'roaster2', price: 500, icon: 'roaster2' },
+      { id: 'hens', price: 220, icon: 'hens' }, { id: 'rod', price: 120, icon: 'rod' }, { id: 'cat', price: 250, icon: 'cat' }, { id: 'lights', price: 200, icon: 'lights' }, { id: 'bench', price: 150, icon: 'bench' },
+    ],
+  };
+  EC.itemName = (id) => C.t('item_' + id);
+
+  // ---- inventory ---------------------------------------------------------------------------
+  EC.count = (id) => C.state.inventory[id] || 0;
+  EC.add = function (id, n) { const inv = C.state.inventory; inv[id] = (inv[id] || 0) + n; C.emit('inventory', { id, n }); };
+  EC.remove = function (id, n) { const inv = C.state.inventory; inv[id] = Math.max(0, (inv[id] || 0) - n); if (!inv[id]) delete inv[id]; C.emit('inventory', { id, n: -n }); };
+  EC.has = (id, n) => EC.count(id) >= (n || 1);
+  EC.bagList = () => C.ITEM_ORDER.filter((id) => EC.count(id) > 0).map((id) => ({ id, n: EC.count(id) }));
+
+  // ---- money ---------------------------------------------------------------------------------
+  EC.earn = function (n) { C.state.coins += n; C.state.stats.earned += n; C.state.today.earned += n; };
+  EC.spend = function (n) { if (C.state.coins < n) return false; C.state.coins -= n; return true; };
+  EC.buy = function (id, price, n) { n = n || 1; if (!EC.spend(price * n)) return false; EC.add(id, n); C.audio.sfx('coin'); return true; };
+  EC.sell = function (id, n) { const it = C.ITEMS[id]; if (!it || !it.sell || EC.count(id) < n) return 0; EC.remove(id, n); EC.earn(it.sell * n); C.audio.sfx('coin'); return it.sell * n; };
+  EC.buyUpgrade = function (id) {
+    const u = C.SHOP.upgrades.find((x) => x.id === id); if (!u || C.state.upgrades[id]) return false;
+    if (!EC.spend(u.price)) return false;
+    C.state.upgrades[id] = true; C.audio.sfx('unlock');
+    W.rebuildUpgrades();
+    if (id === 'hens') E.spawnHens();
+    if (id === 'sprinkler') { for (let i = 0; i < W.soil.length; i++) if (W.soil[i] === 1) W.soil[i] = 2; for (const [, c] of W.crops) c.watered = true; }
+    return true;
+  };
+
+  // ---- reputation & unlocks --------------------------------------------------------------------
+  EC.gainRep = function (n) {
+    const before = C.state.rep; C.state.rep += n;
+    const newly = Object.keys(C.RECIPES).filter((id) => C.RECIPES[id].rep > before && C.RECIPES[id].rep <= C.state.rep);
+    for (const id of newly) { C.ui.toast(C.t('unlock_recipe', { drink: C.t('drink_' + id) }), 'star'); C.audio.sfx('unlock'); }
+    EC.checkLetters();
+  };
+  EC.repLevel = () => Math.min(5, Math.floor(C.state.rep / 20)); // 0..5 hearts
+
+  EC.checkLetters = function () {
+    const S = C.state, f = S.flags;
+    const thresholds = [[0, 'letter_1'], [15, 'letter_2'], [40, 'letter_3'], [80, 'letter_4']];
+    for (const [rep, key] of thresholds) if (S.rep >= rep && !f[key]) { f[key] = 'pending'; if (!S.mail.includes(key)) S.mail.push(key); }
+  };
+  EC.readMail = function () { const S = C.state; if (!S.mail.length) return null; const key = S.mail.shift(); S.flags[key] = 'read'; return key; };
+
+  // ---- customers ---------------------------------------------------------------------------------
+  EC.scheduleDay = function () {
+    const S = C.state, rep = S.rep;
+    const count = Math.min(9, 2 + Math.floor(rep / 12) + (Math.random() < 0.5 ? 1 : 0));
+    const defs = C.rng(S.time.day * 977).shuffle(C.NPC_DEFS.slice());
+    const sched = [];
+    for (let i = 0; i < count; i++) {
+      const def = defs[i % defs.length];
+      const hour = 8 + Math.random() * 10.5;
+      sched.push({ id: def.id, hour, spawned: false, pass: false });
+    }
+    // a couple of passers-by for life on the road
+    for (let i = 0; i < 2; i++) sched.push({ id: defs[(count + i) % defs.length].id, hour: 7 + Math.random() * 12, spawned: false, pass: true });
+    sched.sort((a, b) => a.hour - b.hour);
+    S.schedule = sched;
+    S.today = { customers: 0, served: 0, earned: 0, eggs: 0 };
+  };
+  EC.pickOrder = function (def) {
+    const unlocked = C.stations.unlockedRecipes();
+    if (unlocked.includes(def.fav) && Math.random() < 0.6) return def.fav;
+    return unlocked[Math.floor(Math.random() * unlocked.length)];
+  };
+  EC.update = function (dt) {
+    const S = C.state;
+    if (!S.schedule) return;
+    for (const s of S.schedule) {
+      if (s.spawned || S.time.hour < s.hour) continue;
+      s.spawned = true;
+      const def = C.NPC_DEFS.find((d) => d.id === s.id);
+      if (s.pass) { E.spawnCustomer(def, null, true); continue; }
+      if (E.waitingCustomers().length >= W.customerSpots.length) continue;
+      E.spawnCustomer(def, EC.pickOrder(def), false);
+      S.today.customers += 1;
+    }
+  };
+  // Serve a waiting customer. Returns {coins, tip} or null.
+  EC.serve = function (npc) {
+    const id = npc.order;
+    if (!C.stations.brew(id)) return null;
+    const rec = C.RECIPES[id];
+    const speed = 1 - Math.min(1, npc.waited / npc.patience);
+    const tip = Math.round(speed * 4 + Math.min(6, C.state.rep / 15) + (id === npc.def.fav ? 3 : 0));
+    EC.earn(rec.price + tip);
+    npc.served = true;
+    C.state.stats.served += 1; C.state.today.served += 1;
+    EC.gainRep(2 + (id === npc.def.fav ? 1 : 0));
+    const th = C.NPC_LINES.thanks;
+    const line = Math.random() < 0.4 ? C.npcLine(npc.def.lines[Math.floor(Math.random() * npc.def.lines.length)]) : C.npcLine(th[Math.floor(Math.random() * th.length)]);
+    E.leaveCustomer(npc, line);
+    C.audio.sfx('coin');
+    return { coins: rec.price, tip };
+  };
+  EC.refuse = function (npc) { E.leaveCustomer(npc, C.npcLine(C.NPC_LINES.sorry[Math.floor(Math.random() * 2)])); };
+
+  // ---- morning chores driven by upgrades ---------------------------------------------------
+  C.on('newDay', () => {
+    const S = C.state;
+    if (S.upgrades.hens) {
+      const z = W.henZone; let laid = 0;
+      for (let tries = 0; tries < 12 && laid < 2; tries++) {
+        const x = z.x0 + Math.floor(Math.random() * (z.x1 - z.x0 + 1)), y = z.y0 + Math.floor(Math.random() * (z.y1 - z.y0 + 1));
+        const i = W.idx(x, y);
+        if (W.walkable(x, y) && !W.forage.has(i) && W.ground[i] === C.G.GRASS) { W.forage.set(i, 'egg'); laid++; }
+      }
+    }
+    EC.scheduleDay();
+    EC.checkLetters();
+    S.stats.daysPlayed += 1;
+  });
+
+  // ---- tutorial hints (soft, in order) ------------------------------------------------------
+  const HINTS = ['hint_tap_move', 'hint_hoe', 'hint_seed', 'hint_water', 'hint_cafe', 'hint_coffee_done', 'hint_pulper', 'hint_patio', 'hint_roaster'];
+  EC.tutorialStep = () => C.state.flags.tutorial || 0;
+  EC.tutorialAdvance = function (stepDone) {
+    const f = C.state.flags; const cur = f.tutorial || 0;
+    if (HINTS[cur] === stepDone) { f.tutorial = cur + 1; if (f.tutorial < HINTS.length) setTimeout(() => C.ui.hint(C.t(HINTS[f.tutorial])), 900); else C.ui.toast(C.t('tutorial_done'), 'check'); }
+  };
+  EC.currentHint = () => (EC.tutorialStep() < HINTS.length ? C.t(HINTS[EC.tutorialStep()]) : null);
+})();
+
+</script>
+<script>
+/* Cafetal — 70_ui.js
+   Touch input, HUD, hotbar, toasts, speech bubbles and modal panels.
+   Immediate-mode: every frame redraws and re-registers hit rectangles. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp, lerp } = C.math;
+  const SP = C.sprites, E = C.entities, W = C.world, EC = C.econ, ST = C.stations;
+  const UI = (C.ui = {});
+
+  UI.safe = { t: 0, r: 0, b: 0, l: 0 };
+  UI.modal = null;
+  UI.toasts = [];
+  UI.hintText = null;
+  let hits = [], pressed = null, pressedT = 0;
+  let cssW = 0, cssH = 0, narrow = false;
+  const FONT = 'ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif';
+  const PAL = { panel: '#f6ecd8', panelD: '#e6d6b8', ink: '#3a2a1e', inkSoft: '#7a6a5a', accent: '#c85a3a', accentD: '#a04a2e', green: '#5a9a4a', border: '#a06a3a', dim: 'rgba(12,10,8,0.55)', hud: 'rgba(30,22,16,0.72)', hudInk: '#f6ecd8' };
+  UI.PAL = PAL;
+
+  // ---- drawing helpers ------------------------------------------------------------------
+  function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+  UI.rr = rr;
+  function text(g, s, x, y, size, color, align, weight) { g.font = `${weight || 600} ${size}px ${FONT}`; g.fillStyle = color; g.textAlign = align || 'left'; g.textBaseline = 'middle'; g.fillText(s, x, y); }
+  UI.text = text;
+  function textW(g, s, size, weight) { g.font = `${weight || 600} ${size}px ${FONT}`; return g.measureText(s).width; }
+  function icon(g, name, x, y, size) { const im = SP.icon(name); g.imageSmoothingEnabled = false; g.drawImage(im, x, y, size, size); }
+  UI.icon = icon;
+  function wrap(g, s, maxW, size, weight) {
+    g.font = `${weight || 500} ${size}px ${FONT}`; const out = [];
+    for (const para of String(s).split('\n')) {
+      let line = '';
+      for (const word of para.split(' ')) { const t = line ? line + ' ' + word : word; if (g.measureText(t).width > maxW && line) { out.push(line); line = word; } else line = t; }
+      out.push(line);
+    }
+    return out;
+  }
+  function hit(x, y, w, h, fn, id) { hits.push({ x, y, w, h, fn, id: id || fn }); }
+  UI.hit = hit;
+
+  // button: returns nothing; registers hit
+  function btn(g, id, x, y, w, h, label, opts) {
+    opts = opts || {};
+    const isPressed = pressed === id && pressedT > 0;
+    const disabled = !!opts.disabled;
+    const bg = disabled ? '#c8bca8' : opts.kind === 'secondary' ? PAL.panelD : opts.kind === 'green' ? PAL.green : PAL.accent;
+    const fg = disabled ? '#8a8078' : opts.kind === 'secondary' ? PAL.ink : '#fff8ec';
+    g.save();
+    if (isPressed) { g.translate(0, 1); }
+    rr(g, x, y + 2, w, h, 12); g.fillStyle = 'rgba(0,0,0,0.18)'; g.fill();
+    rr(g, x, y, w, h, 12); g.fillStyle = bg; g.fill();
+    if (!disabled) { rr(g, x + 1, y + 1, w - 2, h / 2, 10); g.fillStyle = 'rgba(255,255,255,0.14)'; g.fill(); }
+    let tx = x + w / 2;
+    if (opts.icon) { const sz = Math.min(28, h - 12); icon(g, opts.icon, x + 10, y + (h - sz) / 2, sz); tx = x + 10 + sz + (w - 10 - sz) / 2; }
+    if (label) text(g, label, tx, y + h / 2, opts.size || 16, fg, 'center', 700);
+    g.restore();
+    if (!disabled) hit(x, y, w, h, opts.fn, id);
+  }
+  UI.btn = btn;
+
+  function panel(g, x, y, w, h, title, onClose) {
+    rr(g, x, y + 4, w, h, 18); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fill();
+    rr(g, x, y, w, h, 18); g.fillStyle = PAL.panel; g.fill();
+    g.lineWidth = 3; g.strokeStyle = PAL.border; rr(g, x, y, w, h, 18); g.stroke();
+    if (title) { text(g, title, x + 20, y + 28, 22, PAL.ink, 'left', 800); }
+    if (onClose) {
+      const bx = x + w - 46, by = y + 12;
+      rr(g, bx, by, 34, 34, 10); g.fillStyle = PAL.panelD; g.fill(); icon(g, 'x', bx + 5, by + 5, 24);
+      hit(bx - 6, by - 6, 46, 46, onClose, 'close');
+    }
+  }
+
+  // ---- toasts & hints ----------------------------------------------------------------
+  UI.toast = function (msg, iconName) { UI.toasts.push({ msg, icon: iconName, t: 0, life: 2.8 }); if (UI.toasts.length > 4) UI.toasts.shift(); };
+  UI.hint = function (msg) { UI.hintText = msg; UI.hintT = 0; };
+
+  // ---- input ---------------------------------------------------------------------------
+  let down = null;
+  UI.bindInput = function (canvas) {
+    const pos = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); C.audio.init();
+      const [x, y] = pos(e); down = { x, y, t: C.now(), id: e.pointerId };
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      const h = hitAt(x, y); pressed = h ? h.id : null; pressedT = 0.2;
+      if (UI.modal && UI.modal.onDown) UI.modal.onDown(x, y, h);
+      if (!UI.modal && !h) C.game.onWorldDown(x, y);
+    }, { passive: false });
+    canvas.addEventListener('pointermove', (e) => { e.preventDefault(); if (!down) return; const [x, y] = pos(e); if (UI.modal) UI.onMove(x, y); else C.game.onWorldDrag(x, y, down); }, { passive: false });
+    const up = (e) => {
+      e.preventDefault(); if (!down) return;
+      const [x, y] = pos(e); const d = down; down = null;
+      const moved = Math.hypot(x - d.x, y - d.y), dt = C.now() - d.t;
+      if (UI.modal && UI.modal.onUp) UI.modal.onUp(x, y);
+      if (moved < 14 && dt < 700) UI.tap(x, y);
+      else C.game.onWorldDragEnd && C.game.onWorldDragEnd(x, y, d, moved);
+      pressed = null;
+    };
+    canvas.addEventListener('pointerup', up, { passive: false });
+    canvas.addEventListener('pointercancel', (e) => { down = null; pressed = null; if (UI.modal && UI.modal.onUp) UI.modal.onUp(-1, -1); }, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  };
+  function hitAt(x, y) { for (let i = hits.length - 1; i >= 0; i--) { const h = hits[i]; if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) return h; } return null; }
+  UI.tap = function (x, y) {
+    const h = hitAt(x, y);
+    if (h) { if (h.fn) h.fn(x, y); return; }
+    if (UI.modal) { if (UI.modal.onTapOutside) UI.modal.onTapOutside(x, y); return; }
+    if (UI.hintText && y > cssH - 150 - UI.safe.b) { /* falls through to world */ }
+    C.game.onWorldTap(x, y);
+  };
+
+  // ---- HUD -----------------------------------------------------------------------------
+  UI.TOOLS = ['hand', 'hoe', 'water', 'coffee_seed', 'tomato_seed', 'corn_seed', 'sunflower_seed', 'bag'];
+  UI.hotbarHeight = () => (narrow ? 62 : 74);
+
+  function drawHUD(g) {
+    const S = C.state, s = UI.safe;
+    const top = s.t + 8;
+    // left card: clock + day
+    const lx = s.l + 10;
+    const wIcon = S.weather === 'rain' ? 'rain' : S.weather === 'snow' ? 'snow' : S.weather === 'cloudy' ? 'cloud' : (W.daylight() < 0.3 ? 'moon' : 'sun');
+    const clock = C.formatTime(S.time.hour), dayStr = `${C.t('day')} ${S.time.day} · ${C.t('season_' + W.season())}`;
+    const cw = Math.max(textW(g, clock, 20, 800), textW(g, dayStr, 13, 600)) + 58;
+    rr(g, lx, top, cw, 54, 14); g.fillStyle = PAL.hud; g.fill();
+    icon(g, wIcon, lx + 10, top + 11, 32);
+    text(g, clock, lx + 50, top + 18, 20, PAL.hudInk, 'left', 800);
+    text(g, dayStr, lx + 50, top + 40, 13, '#e0d0b8', 'left', 600);
+    // right card: coins, rep, settings
+    const coinStr = String(S.coins);
+    const rw = textW(g, coinStr, 20, 800) + 44 + 5 * 20 + 20 + 44;
+    const rx = cssW - s.r - 10 - rw;
+    rr(g, rx, top, rw, 54, 14); g.fillStyle = PAL.hud; g.fill();
+    icon(g, 'coin', rx + 8, top + 8, 26);
+    text(g, coinStr, rx + 40, top + 21, 20, '#ffe08a', 'left', 800);
+    // hearts row (bottom half)
+    const lvl = EC.repLevel();
+    for (let i = 0; i < 5; i++) { g.globalAlpha = i < lvl ? 1 : 0.28; icon(g, 'heart', rx + 8 + i * 20, top + 32, 18); }
+    g.globalAlpha = 1;
+    text(g, String(S.rep), rx + 8 + 5 * 20 + 4, top + 41, 12, '#e0d0b8', 'left', 600);
+    // settings button
+    const gx = rx + rw - 40, gy = top + 9;
+    rr(g, gx, gy, 36, 36, 10); g.fillStyle = 'rgba(255,255,255,0.12)'; g.fill(); icon(g, 'settings', gx + 6, gy + 6, 24);
+    hit(gx - 4, gy - 4, 44, 44, () => { C.audio.sfx('tap'); UI.open('settings'); }, 'settings');
+    // mail badge
+    if (S.mail.length) { const mx = lx + cw + 10; rr(g, mx, top + 8, 40, 40, 12); g.fillStyle = PAL.hud; g.fill(); icon(g, 'letter', mx + 6, top + 14, 28); g.fillStyle = '#e04a4a'; g.beginPath(); g.arc(mx + 34, top + 14, 6, 0, 7); g.fill(); }
+  }
+
+  function drawHotbar(g) {
+    const S = C.state, s = UI.safe;
+    const size = narrow ? 48 : 58, gap = narrow ? 5 : 8;
+    const n = UI.TOOLS.length, totalW = n * size + (n - 1) * gap;
+    const x0 = (cssW - totalW) / 2, y0 = cssH - s.b - size - 10;
+    rr(g, x0 - 10, y0 - 8, totalW + 20, size + 16, 18); g.fillStyle = PAL.hud; g.fill();
+    UI.TOOLS.forEach((tool, i) => {
+      const x = x0 + i * (size + gap), sel = S.tool === tool;
+      const isSeed = tool.endsWith('_seed'); const cnt = isSeed ? EC.count(tool) : 0;
+      rr(g, x, y0, size, size, 12); g.fillStyle = sel ? 'rgba(255,220,150,0.95)' : 'rgba(255,255,255,0.12)'; g.fill();
+      if (sel) { g.lineWidth = 3; g.strokeStyle = '#ffb060'; rr(g, x, y0, size, size, 12); g.stroke(); }
+      const isz = Math.round(size * 0.66);
+      g.globalAlpha = isSeed && !cnt ? 0.35 : 1;
+      icon(g, tool === 'bag' ? 'bag' : tool, x + (size - isz) / 2, y0 + (size - isz) / 2 - (isSeed ? 3 : 0), isz);
+      g.globalAlpha = 1;
+      if (isSeed) { rr(g, x + size - 26, y0 + size - 20, 22, 16, 6); g.fillStyle = cnt ? '#3a2a1e' : '#5a5048'; g.fill(); text(g, String(cnt), x + size - 15, y0 + size - 12, 11, '#fff', 'center', 800); }
+      hit(x, y0, size, size, () => {
+        C.audio.sfx('tap');
+        if (tool === 'bag') { UI.open('bag'); return; }
+        S.tool = tool; C.game.cancelAction();
+      }, 'tool' + i);
+    });
+  }
+
+  function drawToasts(g, dt) {
+    const s = UI.safe; let y = s.t + 74;
+    for (const t of UI.toasts) {
+      t.t += dt;
+      const a = t.t < 0.25 ? t.t / 0.25 : t.t > t.life - 0.5 ? Math.max(0, (t.life - t.t) / 0.5) : 1;
+      const w = textW(g, t.msg, 15, 700) + (t.icon ? 58 : 28);
+      g.globalAlpha = a;
+      const x = (cssW - w) / 2;
+      rr(g, x, y, w, 36, 12); g.fillStyle = PAL.hud; g.fill();
+      if (t.icon) icon(g, t.icon, x + 12, y + 6, 24);
+      text(g, t.msg, x + (t.icon ? 44 : 14), y + 18, 15, PAL.hudInk, 'left', 700);
+      g.globalAlpha = 1;
+      y += 42;
+    }
+    UI.toasts = UI.toasts.filter((t) => t.t < t.life);
+  }
+  function drawHint(g, dt) {
+    if (!UI.hintText || UI.modal) return;
+    UI.hintT = (UI.hintT || 0) + dt;
+    const lines = wrap(g, UI.hintText, Math.min(cssW - 80, 440), 14, 600);
+    const w = Math.min(cssW - 60, 460), h = lines.length * 18 + 18;
+    const x = (cssW - w) / 2, y = cssH - UI.safe.b - UI.hotbarHeight() - h - 12;
+    g.globalAlpha = Math.min(1, UI.hintT / 0.3);
+    rr(g, x, y, w, h, 12); g.fillStyle = 'rgba(246,236,216,0.94)'; g.fill();
+    icon(g, 'star', x + 8, y + h / 2 - 10, 20);
+    lines.forEach((l, i) => text(g, l, x + 34, y + 14 + i * 18, 14, PAL.ink, 'left', 600));
+    g.globalAlpha = 1;
+    hit(x, y, w, h, () => { UI.hintText = null; }, 'hint');
+  }
+
+  // speech bubbles above entities (world -> screen via game)
+  function drawBubbles(g) {
+    const list = [...E.npcs, E.player, E.rosa, E.cat].filter((m) => m && m.bubble);
+    for (const m of list) {
+      const [sx, sy] = C.game.worldToScreen(m.x, m.y - 22);
+      const lines = wrap(g, m.bubble, 200, 13, 600);
+      const w = Math.max(...lines.map((l) => textW(g, l, 13, 600))) + 20, h = lines.length * 16 + 12;
+      let x = clamp(sx - w / 2, 6, cssW - w - 6), y = sy - h - 8;
+      rr(g, x, y, w, h, 10); g.fillStyle = 'rgba(255,252,244,0.96)'; g.fill();
+      g.beginPath(); g.moveTo(sx - 6, y + h - 1); g.lineTo(sx, y + h + 7); g.lineTo(sx + 6, y + h - 1); g.fillStyle = 'rgba(255,252,244,0.96)'; g.fill();
+      lines.forEach((l, i) => text(g, l, x + 10, y + 12 + i * 16, 13, PAL.ink, 'left', 600));
+    }
+    // order icons over waiting customers
+    for (const n of E.npcs) {
+      if (n.state !== 'wait' || n.bubble) continue;
+      const [sx, sy] = C.game.worldToScreen(n.x, n.y - 24);
+      const frac = 1 - n.waited / n.patience;
+      rr(g, sx - 20, sy - 42, 40, 40, 10); g.fillStyle = 'rgba(255,252,244,0.95)'; g.fill();
+      icon(g, n.order, sx - 16, sy - 40, 32);
+      g.fillStyle = frac > 0.4 ? '#6ad06a' : frac > 0.2 ? '#f0c040' : '#e05a4a'; g.fillRect(sx - 16, sy - 6, 32 * frac, 3);
+      hit(sx - 24, sy - 46, 48, 48, () => C.game.tapCustomer(n), 'cust' + n.def.id);
+    }
+  }
+
+  // ---- modals ---------------------------------------------------------------------------
+  UI.open = function (type, data) { UI.modal = { type, data: data || {}, t: 0 }; if (type === 'fishing') ST.startFishing(); };
+  UI.close = function () { if (UI.modal && UI.modal.type === 'roaster') ST.roast = null; if (UI.modal && UI.modal.type === 'fishing') ST.fish = null; UI.modal = null; C.audio.sfx('back'); };
+  UI.pausesTime = () => !!UI.modal && UI.modal.type !== 'order';
+
+  function modalRect(prefW, prefH) {
+    const w = Math.min(prefW, cssW - 24), h = Math.min(prefH, cssH - UI.safe.t - UI.safe.b - 24);
+    return { x: (cssW - w) / 2, y: UI.safe.t + (cssH - UI.safe.t - UI.safe.b - h) / 2, w, h };
+  }
+
+  const MODALS = {
+    title(g, m) {
+      const S = C.state;
+      g.fillStyle = 'rgba(10,14,10,0.45)'; g.fillRect(0, 0, cssW, cssH);
+      const cy = cssH * 0.36;
+      g.save(); g.shadowColor = 'rgba(0,0,0,0.5)'; g.shadowBlur = 12;
+      text(g, C.t('title'), cssW / 2, cy - 30, Math.min(84, cssW / 6), '#f6ecd8', 'center', 900);
+      g.restore();
+      text(g, C.t('tagline'), cssW / 2, cy + 26, 20, '#e8d8b8', 'center', 500);
+      icon(g, 'espresso', cssW / 2 - 24, cy + 50, 48);
+      const bw = Math.min(280, cssW - 60), bx = (cssW - bw) / 2; let by = cy + 120;
+      if (C.save.hasSave()) { btn(g, 'cont', bx, by, bw, 54, C.t('continue_game'), { size: 20, fn: () => { C.audio.sfx('blip'); C.game.continueGame(); } }); by += 66; }
+      btn(g, 'new', bx, by, bw, 54, C.t('new_game'), { size: 20, kind: C.save.hasSave() ? 'secondary' : 'primary', fn: () => { C.audio.sfx('blip'); if (C.save.hasSave()) UI.open('confirm', { text: C.t('new_game_confirm'), yes: () => C.game.newGame() }); else C.game.newGame(); } }); by += 66;
+      // language toggle
+      const lw = 150, lx = (cssW - lw) / 2;
+      btn(g, 'lang', lx, by, lw, 40, C.lang === 'es' ? 'Español ▸ English' : 'English ▸ Español', { kind: 'secondary', size: 14, fn: () => { C.audio.sfx('tap'); C.game.toggleLang(); } });
+      text(g, 'v1.0 · made with pixels & WebAudio', cssW / 2, cssH - UI.safe.b - 18, 12, 'rgba(246,236,216,0.7)', 'center', 500);
+    },
+    confirm(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(380, 190); panel(g, r.x, r.y, r.w, r.h, null);
+      const lines = wrap(g, m.data.text, r.w - 40, 17, 600); lines.forEach((l, i) => text(g, l, r.x + r.w / 2, r.y + 40 + i * 22, 17, PAL.ink, 'center', 600));
+      const bw = (r.w - 60) / 2;
+      btn(g, 'yes', r.x + 20, r.y + r.h - 70, bw, 50, C.t('yes'), { fn: () => { const f = m.data.yes; UI.modal = null; f && f(); } });
+      btn(g, 'no', r.x + 40 + bw, r.y + r.h - 70, bw, 50, C.t('no'), { kind: 'secondary', fn: () => { UI.modal = null; C.audio.sfx('back'); } });
+    },
+    settings(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(400, 380); panel(g, r.x, r.y, r.w, r.h, C.t('settings'), UI.close);
+      const st = C.save.settings; let y = r.y + 70; const rowH = 56;
+      const row = (label, value, id, fn) => { text(g, label, r.x + 24, y + 20, 17, PAL.ink, 'left', 700); btn(g, id, r.x + r.w - 150, y, 126, 42, value, { kind: 'secondary', size: 15, fn }); y += rowH; };
+      row(C.t('language'), C.lang === 'es' ? 'Español' : 'English', 'lang', () => { C.audio.sfx('tap'); C.game.toggleLang(); });
+      row(C.t('music'), st.music ? C.t('on') : C.t('off'), 'music', () => { st.music = !st.music; C.audio.setMusic(st.music); C.save.saveSettings(); C.audio.sfx('tap'); });
+      row(C.t('sound'), st.sound ? C.t('on') : C.t('off'), 'sound', () => { st.sound = !st.sound; C.audio.setSound(st.sound); C.save.saveSettings(); C.audio.sfx('tap'); });
+      y += 6;
+      btn(g, 'newgame', r.x + 24, y, r.w - 48, 46, C.t('new_game'), { kind: 'secondary', fn: () => UI.open('confirm', { text: C.t('new_game_confirm'), yes: () => C.game.newGame() }) }); y += 56;
+      const S = C.state;
+      text(g, `${C.t('day')} ${S.time.day} · ${C.t('happy')}: ${S.stats.served} · ${C.t('earned')}: ${S.stats.earned}`, r.x + r.w / 2, y + 12, 12, PAL.inkSoft, 'center', 500);
+      if (!window.navigator.standalone && /iPad|iPhone/.test(navigator.userAgent)) text(g, C.t('fullscreen'), r.x + r.w / 2, y + 32, 12, PAL.inkSoft, 'center', 500);
+    },
+    letter(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const body = C.t(m.data.key);
+      const r = modalRect(440, 420);
+      rr(g, r.x, r.y + 4, r.w, r.h, 8); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fill();
+      rr(g, r.x, r.y, r.w, r.h, 8); g.fillStyle = '#fbf5e6'; g.fill();
+      g.strokeStyle = '#d8c8a8'; g.lineWidth = 2; rr(g, r.x + 8, r.y + 8, r.w - 16, r.h - 16, 6); g.stroke();
+      icon(g, 'letter', r.x + r.w - 52, r.y + 16, 32);
+      const lines = wrap(g, body, r.w - 64, 16, 500);
+      lines.forEach((l, i) => text(g, l, r.x + 32, r.y + 44 + i * 22, 16, PAL.ink, 'left', 500));
+      btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, C.t('ok'), { fn: () => { UI.modal = null; C.audio.sfx('blip'); } });
+    },
+    sleep(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(360, 200); panel(g, r.x, r.y, r.w, r.h, null);
+      icon(g, 'zzz', r.x + r.w / 2 - 20, r.y + 20, 40);
+      text(g, C.t('sleep_q'), r.x + r.w / 2, r.y + 80, 20, PAL.ink, 'center', 800);
+      const bw = (r.w - 60) / 2;
+      btn(g, 'yes', r.x + 20, r.y + r.h - 70, bw, 50, C.t('yes'), { fn: () => { UI.modal = null; C.game.sleep(); } });
+      btn(g, 'no', r.x + 40 + bw, r.y + r.h - 70, bw, 50, C.t('no'), { kind: 'secondary', fn: UI.close });
+    },
+    summary(g, m) {
+      g.fillStyle = 'rgba(8,10,14,0.6)'; g.fillRect(0, 0, cssW, cssH);
+      const S = C.state, d = m.data;
+      const r = modalRect(400, 330); panel(g, r.x, r.y, r.w, r.h, C.t('good_morning'));
+      let y = r.y + 70;
+      text(g, C.t('sleep_summary', { day: S.time.day, season: C.t('season_' + W.season()) }), r.x + 24, y, 17, PAL.ink, 'left', 700); y += 34;
+      const line = (ic, label, val) => { icon(g, ic, r.x + 24, y - 12, 24); text(g, label, r.x + 58, y, 15, PAL.inkSoft, 'left', 600); text(g, String(val), r.x + r.w - 28, y, 17, PAL.ink, 'right', 800); y += 32; };
+      line('heart', C.t('customers_today'), `${d.served} / ${d.customers}`);
+      line('coin', C.t('earned'), d.earned);
+      const fc = S.weather; line(fc === 'rain' ? 'rain' : fc === 'snow' ? 'snow' : fc === 'cloudy' ? 'cloud' : 'sun', C.t('weather_' + fc), '');
+      if (S.forecast === 'rain') text(g, C.t('forecast_rain'), r.x + 24, y, 13, PAL.inkSoft, 'left', 500);
+      else if (S.forecast === 'snow') text(g, C.t('forecast_snow'), r.x + 24, y, 13, PAL.inkSoft, 'left', 500);
+      else text(g, C.t('forecast_clear'), r.x + 24, y, 13, PAL.inkSoft, 'left', 500);
+      btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, C.t('ok'), { fn: () => { UI.modal = null; C.audio.sfx('blip'); C.game.afterSummary(); } });
+    },
+    bag(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(520, 440); panel(g, r.x, r.y, r.w, r.h, C.t('inventory'), UI.close);
+      const items = EC.bagList();
+      if (!items.length) text(g, C.t('empty_bag'), r.x + r.w / 2, r.y + r.h / 2, 16, PAL.inkSoft, 'center', 600);
+      const cell = 76, cols = Math.max(3, Math.floor((r.w - 40) / cell));
+      items.forEach((it, i) => {
+        const cx = r.x + 20 + (i % cols) * cell, cy = r.y + 60 + Math.floor(i / cols) * (cell + 8);
+        if (cy + cell > r.y + r.h - 10) return;
+        rr(g, cx, cy, cell - 8, cell - 8, 12); g.fillStyle = m.data.sel === it.id ? '#ffe0b0' : PAL.panelD; g.fill();
+        icon(g, it.id, cx + (cell - 8 - 40) / 2, cy + 6, 40);
+        text(g, String(it.n), cx + cell - 16, cy + cell - 20, 13, PAL.ink, 'right', 800);
+        hit(cx, cy, cell - 8, cell - 8, () => { m.data.sel = it.id; C.audio.sfx('tap'); }, 'bag' + it.id);
+      });
+      if (m.data.sel) { const it = C.ITEMS[m.data.sel]; text(g, `${EC.itemName(m.data.sel)}${it && it.sell ? `  ·  ${it.sell} ${C.t('coins')}` : ''}`, r.x + r.w / 2, r.y + r.h - 26, 15, PAL.ink, 'center', 700); }
+    },
+    shop(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const S = C.state;
+      const r = modalRect(560, 520); panel(g, r.x, r.y, r.w, r.h, C.t('shop'), UI.close);
+      icon(g, 'coin', r.x + r.w - 150, r.y + 16, 24); text(g, String(S.coins), r.x + r.w - 120, r.y + 28, 18, PAL.ink, 'left', 800);
+      const tabs = [['seeds', C.t('seeds')], ['pantry', C.t('pantry')], ['upgrades', C.t('upgrades')], ['sell', C.t('sell')]];
+      const tab = m.data.tab || 'seeds';
+      const tw = (r.w - 40) / tabs.length;
+      tabs.forEach(([id, label], i) => {
+        const x = r.x + 20 + i * tw, y = r.y + 54;
+        rr(g, x + 2, y, tw - 4, 36, 10); g.fillStyle = tab === id ? PAL.accent : PAL.panelD; g.fill();
+        text(g, label, x + tw / 2, y + 18, 14, tab === id ? '#fff8ec' : PAL.ink, 'center', 700);
+        hit(x, y, tw, 36, () => { m.data.tab = id; m.data.scroll = 0; C.audio.sfx('tap'); }, 'tab' + id);
+      });
+      const listY = r.y + 100, listH = r.h - 112, rowH = 62;
+      g.save(); g.beginPath(); g.rect(r.x, listY, r.w, listH); g.clip();
+      let rows = [];
+      if (tab === 'sell') rows = EC.bagList().filter((it) => C.ITEMS[it.id].sell > 0).map((it) => ({ id: it.id, n: it.n, price: C.ITEMS[it.id].sell, sell: true }));
+      else rows = C.SHOP[tab].map((e) => ({ ...e }));
+      const scroll = m.data.scroll || 0;
+      rows.forEach((row, i) => {
+        const y = listY + i * rowH - scroll; if (y + rowH < listY || y > listY + listH) return;
+        rr(g, r.x + 16, y + 4, r.w - 32, rowH - 8, 12); g.fillStyle = 'rgba(255,255,255,0.45)'; g.fill();
+        const ic = tab === 'upgrades' ? row.icon : row.id;
+        icon(g, ic, r.x + 26, y + 11, 40);
+        const name = tab === 'upgrades' ? C.t('up_' + row.id) : EC.itemName(row.id);
+        text(g, name, r.x + 76, y + 22, 15, PAL.ink, 'left', 700);
+        if (tab === 'upgrades') { const dl = wrap(g, C.t('up_' + row.id + '_d'), r.w - 260, 12, 500); text(g, dl[0], r.x + 76, y + 42, 12, PAL.inkSoft, 'left', 500); }
+        else if (row.sell) text(g, `x${row.n}  ·  ${row.price} ${C.t('coins')}`, r.x + 76, y + 42, 13, PAL.inkSoft, 'left', 500);
+        else text(g, `${row.price} ${C.t('coins')}  ·  ${C.t('owned')}: ${EC.count(row.id)}`, r.x + 76, y + 42, 13, PAL.inkSoft, 'left', 500);
+        const inView = y >= listY - 10 && y + rowH <= listY + listH + 10;
+        if (tab === 'upgrades') {
+          if (S.upgrades[row.id]) { icon(g, 'check', r.x + r.w - 60, y + 18, 28); }
+          else btn(g, 'buy' + row.id, r.x + r.w - 130, y + 12, 104, 38, `${row.price}`, { icon: 'coin', size: 14, disabled: S.coins < row.price || !inView, fn: () => { if (EC.buyUpgrade(row.id)) UI.toast(C.t('up_' + row.id), 'check'); else C.audio.sfx('error'); } });
+        } else if (row.sell) {
+          btn(g, 'sell1' + row.id, r.x + r.w - 196, y + 12, 80, 38, '+1', { kind: 'green', size: 14, disabled: !inView, fn: () => EC.sell(row.id, 1) });
+          btn(g, 'sellall' + row.id, r.x + r.w - 108, y + 12, 84, 38, C.t('sell_all'), { kind: 'green', size: 13, disabled: !inView, fn: () => { const n = EC.count(row.id); if (n) UI.toast(`+${EC.sell(row.id, n)} ${C.t('coins')}`, 'coin'); } });
+        } else {
+          btn(g, 'buy1' + row.id, r.x + r.w - 196, y + 12, 80, 38, `${row.price}`, { icon: 'coin', size: 13, disabled: S.coins < row.price || !inView, fn: () => { if (!EC.buy(row.id, row.price, 1)) { C.audio.sfx('error'); UI.toast(C.t('not_enough')); } } });
+          btn(g, 'buy5' + row.id, r.x + r.w - 108, y + 12, 84, 38, `x5 ${row.price * 5}`, { size: 12, disabled: S.coins < row.price * 5 || !inView, fn: () => { if (!EC.buy(row.id, row.price, 5)) { C.audio.sfx('error'); UI.toast(C.t('not_enough')); } } });
+        }
+      });
+      if (!rows.length) text(g, C.t('empty_bag'), r.x + r.w / 2, listY + 40, 15, PAL.inkSoft, 'center', 600);
+      g.restore();
+      m.maxScroll = Math.max(0, rows.length * rowH - listH);
+      m.scrollArea = { x: r.x, y: listY, w: r.w, h: listH };
+    },
+    order(g, m) {
+      // café panel: waiting customers with orders + recipes reference
+      const S = C.state;
+      g.fillStyle = 'rgba(12,10,8,0.35)'; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(560, 500); panel(g, r.x, r.y, r.w, r.h, C.t('cafe'), UI.close);
+      const waiting = E.waitingCustomers();
+      const tab = m.data.tab || (waiting.length ? 'orders' : 'recipes');
+      const tabs = [['orders', `${C.t('customers_today')} (${waiting.length})`], ['recipes', C.t('recipe')]];
+      const tw = (r.w - 40) / 2;
+      tabs.forEach(([id, label], i) => { const x = r.x + 20 + i * tw, y = r.y + 54; rr(g, x + 2, y, tw - 4, 36, 10); g.fillStyle = tab === id ? PAL.accent : PAL.panelD; g.fill(); text(g, label, x + tw / 2, y + 18, 14, tab === id ? '#fff8ec' : PAL.ink, 'center', 700); hit(x, y, tw, 36, () => { m.data.tab = id; C.audio.sfx('tap'); }, 'otab' + id); });
+      const listY = r.y + 100, listH = r.h - 112;
+      g.save(); g.beginPath(); g.rect(r.x, listY, r.w, listH); g.clip();
+      if (tab === 'orders') {
+        if (!waiting.length) text(g, '…', r.x + r.w / 2, listY + 40, 20, PAL.inkSoft, 'center', 600);
+        const rowH = 96;
+        waiting.forEach((n, i) => {
+          const y = listY + i * rowH - (m.data.scroll || 0);
+          rr(g, r.x + 16, y + 4, r.w - 32, rowH - 8, 12); g.fillStyle = 'rgba(255,255,255,0.45)'; g.fill();
+          // portrait
+          const port = SP.humanoid(n.look, 0, 0); g.imageSmoothingEnabled = false; g.drawImage(port, r.x + 26, y + 10, 48, 60);
+          text(g, n.def.name, r.x + 84, y + 24, 16, PAL.ink, 'left', 800);
+          icon(g, n.order, r.x + 84, y + 34, 28); text(g, C.t('drink_' + n.order), r.x + 118, y + 48, 14, PAL.ink, 'left', 600);
+          text(g, `${C.RECIPES[n.order].price} ${C.t('coins')}`, r.x + 118, y + 68, 12, PAL.inkSoft, 'left', 500);
+          const missing = ST.missingFor(n.order);
+          // needs icons
+          let ix = r.x + 84; const needs = C.RECIPES[n.order].needs;
+          for (const it in needs) { const ok = EC.count(it) >= needs[it]; g.globalAlpha = ok ? 1 : 0.35; icon(g, it, ix, y + 72, 20); g.globalAlpha = 1; if (!ok) { g.fillStyle = '#e05a4a'; g.fillRect(ix, y + 90, 20, 2); } ix += 24; }
+          // patience
+          const frac = 1 - n.waited / n.patience; g.fillStyle = PAL.panelD; g.fillRect(r.x + r.w - 130, y + 66, 104, 6); g.fillStyle = frac > 0.4 ? '#6ad06a' : frac > 0.2 ? '#f0c040' : '#e05a4a'; g.fillRect(r.x + r.w - 130, y + 66, 104 * frac, 6);
+          btn(g, 'serve' + n.def.id, r.x + r.w - 130, y + 12, 104, 44, C.t('serve'), { kind: 'green', disabled: missing.length > 0, fn: () => C.game.serveCustomer(n) });
+          btn(g, 'sorry' + n.def.id, r.x + r.w - 130, y + 74, 104, 14, '', { kind: 'secondary', size: 10, fn: () => { EC.refuse(n); C.audio.sfx('back'); } });
+          text(g, C.t('sorry'), r.x + r.w - 78, y + 81, 10, PAL.inkSoft, 'center', 600);
+        });
+        m.maxScroll = Math.max(0, waiting.length * rowH - listH);
+      } else {
+        const ids = Object.keys(C.RECIPES); const rowH = 54;
+        ids.forEach((id, i) => {
+          const y = listY + i * rowH - (m.data.scroll || 0), unlocked = S.rep >= C.RECIPES[id].rep;
+          rr(g, r.x + 16, y + 4, r.w - 32, rowH - 8, 12); g.fillStyle = unlocked ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.06)'; g.fill();
+          g.globalAlpha = unlocked ? 1 : 0.4;
+          icon(g, id, r.x + 26, y + 11, 32); text(g, C.t('drink_' + id), r.x + 68, y + 20, 15, PAL.ink, 'left', 700);
+          text(g, unlocked ? `${C.RECIPES[id].price} ${C.t('coins')}` : `${C.t('reputation')} ${C.RECIPES[id].rep}`, r.x + 68, y + 39, 12, PAL.inkSoft, 'left', 500);
+          let ix = r.x + r.w - 40; const needs = C.RECIPES[id].needs;
+          for (const it in needs) { ix -= 30; icon(g, it, ix, y + 15, 24); if (needs[it] > 1) text(g, 'x' + needs[it], ix + 24, y + 40, 10, PAL.ink, 'right', 700); }
+          g.globalAlpha = 1;
+        });
+        m.maxScroll = Math.max(0, ids.length * rowH - listH);
+      }
+      g.restore();
+      m.scrollArea = { x: r.x, y: listY, w: r.w, h: listH };
+    },
+    roaster(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(480, 420); panel(g, r.x, r.y, r.w, r.h, C.t('roaster_title'), UI.close);
+      const ro = ST.roast;
+      if (!ro) {
+        const n = Math.min(EC.count('green'), ST.roastCap());
+        text(g, C.t('roaster_choose'), r.x + r.w / 2, r.y + 74, 17, PAL.ink, 'center', 700);
+        text(g, C.t('roaster_batch', { n }), r.x + r.w / 2, r.y + 100, 14, PAL.inkSoft, 'center', 500);
+        icon(g, 'green', r.x + r.w / 2 - 24, r.y + 118, 48);
+        const bw = Math.min(130, (r.w - 80) / 3); const x0 = r.x + (r.w - bw * 3 - 20) / 2;
+        ['light', 'medium', 'dark'].forEach((lv, i) => btn(g, 'lv' + lv, x0 + i * (bw + 10), r.y + 190, bw, 64, C.t('roast_' + lv), { icon: 'roast_' + lv, size: 14, fn: () => { ST.startRoast(lv); C.audio.sfx('blip'); } }));
+        text(g, C.t('roaster_hold'), r.x + r.w / 2, r.y + 290, 13, PAL.inkSoft, 'center', 500);
+        return;
+      }
+      // drum
+      const cx = r.x + r.w / 2, cy = r.y + 150;
+      g.fillStyle = '#4a4a50'; rr(g, cx - 70, cy + 40, 140, 16, 6); g.fill();
+      g.fillStyle = '#6a6a70'; g.beginPath(); g.ellipse(cx, cy, 70, 46, 0, 0, 7); g.fill();
+      g.fillStyle = '#8a8a90'; g.beginPath(); g.ellipse(cx, cy, 54, 32, 0, 0, 7); g.fill();
+      // beans inside
+      const bc = ST.roastColor(ro.t); const rnd = C.rng(12);
+      for (let i = 0; i < 26; i++) { const a = rnd() * 6.28, d = Math.sqrt(rnd()) * 0.9; const bx = cx + Math.cos(a) * 46 * d + (ro.holding ? Math.sin(m.t * 20 + i) * 2 : 0), by = cy + Math.sin(a) * 24 * d + (ro.holding ? Math.cos(m.t * 17 + i) * 2 : 0); g.fillStyle = bc; g.beginPath(); g.ellipse(bx, by, 5, 3.5, a, 0, 7); g.fill(); }
+      // flame
+      if (ro.holding && !ro.done) { for (let i = 0; i < 5; i++) { const fx = cx - 30 + i * 15, fh = 10 + Math.sin(m.t * 30 + i * 2) * 5; g.fillStyle = i % 2 ? '#ffb040' : '#ff7030'; g.beginPath(); g.moveTo(fx - 5, cy + 58); g.lineTo(fx, cy + 58 - fh); g.lineTo(fx + 5, cy + 58); g.fill(); } }
+      // bar
+      const bx = r.x + 40, bw = r.w - 80, by = r.y + 240, bh = 26;
+      const grad = g.createLinearGradient(bx, 0, bx + bw, 0);
+      [[0, '#9fbf6a'], [0.25, '#c9b06a'], [0.4, '#b98a4a'], [0.58, '#8a5a30'], [0.78, '#4a2e1e'], [0.9, '#2a1a10'], [1, '#111']].forEach(([t, c]) => grad.addColorStop(t, c));
+      rr(g, bx, by, bw, bh, 8); g.fillStyle = grad; g.fill();
+      const [wa, wb] = ST.ROAST_WINDOWS[ro.level];
+      g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(bx + wa * bw, by - 6, (wb - wa) * bw, bh + 12);
+      g.strokeStyle = '#fff'; g.lineWidth = 2; g.strokeRect(bx + wa * bw, by - 6, (wb - wa) * bw, bh + 12);
+      // needle
+      const nx = bx + ro.t * bw; g.fillStyle = '#fff'; g.beginPath(); g.moveTo(nx - 8, by - 14); g.lineTo(nx + 8, by - 14); g.lineTo(nx, by - 2); g.fill();
+      g.fillStyle = PAL.ink; g.fillRect(nx - 1, by - 2, 2, bh + 4);
+      text(g, C.t('roast_' + ro.level), r.x + r.w / 2, r.y + 62, 16, PAL.ink, 'center', 800);
+      if (!ro.done) text(g, ro.holding ? C.t('roaster_release') : C.t('roaster_hold'), r.x + r.w / 2, by + 60, 16, ro.holding ? PAL.accent : PAL.inkSoft, 'center', 800);
+      else {
+        const res = ro.result; const key = res.grade === 'perfect' ? 'roast_perfect' : res.grade === 'good' ? 'roast_good' : res.grade === 'burnt' ? 'roast_burnt' : 'roast_under';
+        text(g, C.t(key, { n: res.n }), r.x + r.w / 2, by + 60, 16, res.grade === 'perfect' ? PAL.green : res.grade === 'burnt' ? PAL.accent : PAL.ink, 'center', 800);
+        btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, C.t('ok'), { fn: () => { ST.roast = null; if (EC.count('green') <= 0) UI.close(); else C.audio.sfx('blip'); } });
+      }
+    },
+    fishing(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH);
+      const r = modalRect(420, 340); panel(g, r.x, r.y, r.w, r.h, C.t('pond'), UI.close);
+      const f = ST.fish; if (!f) return;
+      // water
+      rr(g, r.x + 20, r.y + 56, r.w - 40, 180, 14); g.fillStyle = '#3d7fb0'; g.fill();
+      for (let i = 0; i < 6; i++) { g.strokeStyle = 'rgba(255,255,255,0.25)'; g.lineWidth = 2; g.beginPath(); const yy = r.y + 80 + i * 26 + Math.sin(m.t * 2 + i) * 3; g.moveTo(r.x + 40, yy); g.bezierCurveTo(r.x + 90, yy - 6, r.x + 140, yy + 6, r.x + r.w - 40, yy); g.stroke(); }
+      const bx = r.x + r.w / 2, dip = f.state === 'bite' ? 14 : Math.sin(m.t * 3) * 3;
+      g.strokeStyle = '#eee'; g.lineWidth = 1; g.beginPath(); g.moveTo(bx + 60, r.y + 40); g.lineTo(bx, r.y + 140 + dip); g.stroke();
+      g.fillStyle = '#e04a3a'; g.beginPath(); g.arc(bx, r.y + 140 + dip, 9, 0, 7); g.fill(); g.fillStyle = '#fff'; g.beginPath(); g.arc(bx, r.y + 136 + dip, 5, 0, 7); g.fill();
+      if (f.state === 'bite') { for (let i = 0; i < 3; i++) { g.strokeStyle = `rgba(255,255,255,${0.6 - i * 0.2})`; g.beginPath(); g.arc(bx, r.y + 150, 14 + i * 10 + (m.t * 40 % 10), 0, 7); g.stroke(); } }
+      const label = f.state === 'wait' ? C.t('fish_wait') : f.state === 'bite' ? C.t('fish_now') : f.result === 'caught' ? C.t('fish_caught') : C.t('fish_missed');
+      text(g, label, r.x + r.w / 2, r.y + 270, f.state === 'bite' ? 26 : 17, f.state === 'bite' ? PAL.accent : PAL.ink, 'center', 800);
+      if (f.state === 'done') { if (f.result === 'caught') icon(g, 'fish', r.x + r.w / 2 - 20, r.y + 288, 40); if (!m.doneT) m.doneT = m.t; if (m.t - m.doneT > 1.4) UI.close(); }
+      else hit(r.x, r.y + 50, r.w, r.h - 50, () => { const res = ST.tapFishing(); if (res === 'caught') UI.toast(C.t('fish_caught'), 'fish'); else if (res === 'missed') C.audio.sfx('error'); }, 'fishtap');
+    },
+  };
+
+  // scroll for lists via drag
+  let scrollDrag = null;
+  UI.modalDown = function (x, y) { const m = UI.modal; if (m && m.scrollArea) { const a = m.scrollArea; if (x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h) scrollDrag = { y, s: m.data.scroll || 0 }; } };
+  UI.modalMove = function (x, y) { const m = UI.modal; if (scrollDrag && m) { m.data.scroll = clamp(scrollDrag.s + (scrollDrag.y - y), 0, m.maxScroll || 0); } };
+  UI.modalUp = function () { scrollDrag = null; };
+
+  // ---- main draw ---------------------------------------------------------------------------
+  UI.resize = function (w, h) { cssW = w; cssH = h; narrow = w < 560; };
+  UI.update = function (dt) { if (pressedT > 0) pressedT -= dt; if (UI.modal) { UI.modal.t += dt; if (UI.modal.type === 'roaster') ST.updateRoast(dt); if (UI.modal.type === 'fishing') ST.updateFishing(dt); } };
+  UI.draw = function (g, dt) {
+    hits = [];
+    g.imageSmoothingEnabled = false;
+    if (C.game.mode === 'play') {
+      drawBubbles(g);
+      drawHUD(g);
+      drawHotbar(g);
+      drawToasts(g, dt);
+      drawHint(g, dt);
+    }
+    if (UI.modal) {
+      const m = UI.modal;
+      // block world taps behind modal
+      hits.unshift({ x: 0, y: 0, w: cssW, h: cssH, fn: () => { if (m.type !== 'title' && m.type !== 'summary' && m.type !== 'letter' && m.type !== 'roaster' && m.type !== 'fishing' && m.type !== 'confirm') UI.close(); }, id: 'backdrop' });
+      const fn = MODALS[m.type]; if (fn) fn(g, m);
+      // gestures for modal
+      m.onDown = (x, y) => { UI.modalDown(x, y); if (m.type === 'roaster' && ST.roast && !ST.roast.done) { ST.roast.holding = true; } };
+      m.onUp = (x, y) => { UI.modalUp(); if (m.type === 'roaster' && ST.roast && !ST.roast.done && ST.roast.holding) { ST.roast.holding = false; if (ST.roast.t > 0.03) { ST.releaseRoast(); C.audio.sfx(ST.roast.result.grade === 'perfect' ? 'unlock' : ST.roast.result.grade === 'burnt' ? 'error' : 'harvest'); } } };
+      if (m.type === 'title' || m.type === 'summary' || m.type === 'letter' || m.type === 'confirm' || m.type === 'roaster' || m.type === 'fishing') { /* backdrop taps ignored */ }
+    }
+  };
+  UI.onMove = function (x, y) { if (UI.modal) UI.modalMove(x, y); };
+  UI.__hits = () => hits; // for automated tests
+})();
+
+</script>
+<script>
+/* Cafetal — 80_save.js
+   Game state creation, localStorage save/load, settings. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const W = C.world;
+  const SV = (C.save = {});
+
+  SV.newState = function () {
+    return {
+      version: 1,
+      time: { day: 1, hour: C.DAY_START_HOUR + 0.5, season: 0, year: 1 },
+      weather: 'clear', forecast: 'clear',
+      coins: 120, rep: 0,
+      inventory: { tomato_seed: 6, coffee_seed: 3, roast_medium: 4, roast_dark: 3, milk: 3 },
+      upgrades: { sprinkler: false, roof: false, patio2: false, roaster2: false, cat: false, lights: false, bench: false, hens: false, rod: false },
+      patio: { n: 0, days: 0, dry: false },
+      flags: { tutorial: 0 },
+      mail: [],
+      stats: { served: 0, earned: 0, daysPlayed: 1, roasts: 0, perfectRoasts: 0 },
+      today: { customers: 0, served: 0, earned: 0, eggs: 0 },
+      player: { tx: 9, ty: 14 },
+      schedule: null,
+      tool: 'hand',
+    };
+  };
+
+  SV.serialize = function () {
+    const S = C.state;
+    S.player = { tx: C.entities.player.tx, ty: C.entities.player.ty };
+    const soil = [];
+    for (let i = 0; i < W.soil.length; i++) if (W.soil[i]) soil.push([i, W.soil[i]]);
+    const crops = [...W.crops].map(([i, c]) => [i, c.type, c.days, c.watered ? 1 : 0]);
+    const forage = [...W.forage];
+    return JSON.stringify({ state: S, soil, crops, forage, savedAt: Date.now() });
+  };
+  SV.applyWorld = function (data) {
+    W.soil.fill(0); W.crops.clear(); W.forage.clear();
+    for (const [i, v] of data.soil || []) W.soil[i] = v;
+    for (const [i, type, days, watered] of data.crops || []) if (C.CROPS[type]) W.crops.set(i, { type, days, watered: !!watered });
+    for (const [i, t] of data.forage || []) W.forage.set(i, t);
+  };
+  SV.save = function () {
+    try { localStorage.setItem(C.SAVE_KEY, SV.serialize()); return true; } catch (e) { return false; }
+  };
+  SV.hasSave = function () { try { return !!localStorage.getItem(C.SAVE_KEY); } catch (e) { return false; } };
+  SV.load = function () {
+    try {
+      const raw = localStorage.getItem(C.SAVE_KEY); if (!raw) return null;
+      const data = JSON.parse(raw);
+      const fresh = SV.newState();
+      // merge to keep forward-compat with new fields
+      const S = Object.assign(fresh, data.state);
+      S.upgrades = Object.assign(fresh.upgrades, data.state.upgrades || {});
+      S.stats = Object.assign(fresh.stats, data.state.stats || {});
+      S.flags = Object.assign(fresh.flags, data.state.flags || {});
+      S.patio = Object.assign(fresh.patio, data.state.patio || {});
+      return { state: S, world: data };
+    } catch (e) { return null; }
+  };
+  SV.clear = function () { try { localStorage.removeItem(C.SAVE_KEY); } catch (e) { /* ignore */ } };
+
+  SV.settings = { lang: 'en', music: true, sound: true };
+  SV.loadSettings = function () {
+    try { const raw = localStorage.getItem(C.SETTINGS_KEY); if (raw) Object.assign(SV.settings, JSON.parse(raw)); } catch (e) { /* ignore */ }
+    if (!localStorage.getItem(C.SETTINGS_KEY) && /^es/i.test(navigator.language || '')) SV.settings.lang = 'es';
+    C.setLang(SV.settings.lang);
+  };
+  SV.saveSettings = function () { try { localStorage.setItem(C.SETTINGS_KEY, JSON.stringify(SV.settings)); } catch (e) { /* ignore */ } };
+})();
+
+</script>
+<script>
+/* Cafetal — 90_main.js
+   Game loop, camera, world rendering (ground, sorted sprites, weather, lighting),
+   tap-to-act logic, sleep/day cycle, autosave. */
+(function () {
+  'use strict';
+  const C = window.Cafetal;
+  const { clamp, lerp } = C.math;
+  const T = C.TILE, MW = C.MAP_W, MH = C.MAP_H;
+  const SP = C.sprites, W = C.world, E = C.entities, EC = C.econ, ST = C.stations, UI = C.ui;
+  const GM = (C.game = { mode: 'title', scale: 3, dpr: 1, cssW: 0, cssH: 0, cam: { x: 0, y: 0 }, time: 0 });
+
+  let canvas, g, worldCv, worldG, lightCv, lightG;
+  let particles = [], fireflies = [], drops = [], leaves = [];
+  let fade = 0, fadeDir = 0, sleeping = false, autosaveT = 0, tapMark = null, pendingSummary = null;
+  let lastNow = 0;
+
+  // ---- setup ------------------------------------------------------------------------------
+  GM.init = function () {
+    canvas = document.getElementById('game');
+    g = canvas.getContext('2d');
+    C.save.loadSettings();
+    C.audio.setMusic(C.save.settings.music); C.audio.setSound(C.save.settings.sound);
+    worldCv = C.canvas(320, 240); worldG = C.ctx2d(worldCv);
+    lightCv = C.canvas(320, 240); lightG = C.ctx2d(lightCv);
+    GM.resize();
+    window.addEventListener('resize', GM.resize);
+    window.addEventListener('orientationchange', () => setTimeout(GM.resize, 120));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', GM.resize);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { if (GM.mode === 'play') C.save.save(); C.audio.suspend(); } else C.audio.resume(); });
+    // load save (so the title screen shows the player's farm) or start fresh
+    const loaded = C.save.load();
+    GM.setup(loaded);
+    UI.bindInput(canvas);
+    UI.open('title');
+    C.on('midnight', () => { if (!sleeping) { UI.toast(C.t('midnight'), 'moon'); GM.sleep(); } });
+    requestAnimationFrame(loop);
+  };
+  GM.setup = function (loaded) {
+    C.state = loaded ? loaded.state : C.save.newState();
+    W.build();
+    if (loaded) C.save.applyWorld(loaded.world);
+    else { W.soil.fill(0); W.crops.clear(); W.forage.clear(); for (let y = 15; y <= 17; y++) for (let x = 15; x <= 18; x++) W.soil[W.idx(x, y)] = 1; for (const [x, y] of W.forageSpots.slice(0, 6)) W.forage.set(W.idx(x, y), Math.random() < 0.5 ? 'mint' : 'flower'); }
+    const p = C.state.player || { tx: 9, ty: 14 };
+    E.initPlayer(W.walkable(p.tx, p.ty) ? p.tx : 9, W.walkable(p.tx, p.ty) ? p.ty : 14);
+    E.initStatics(); E.npcs = [];
+    if (!C.state.schedule) EC.scheduleDay();
+    EC.checkLetters();
+    GM.cam.x = clamp(E.player.x - worldCv.width / 2, 0, MW * T - worldCv.width);
+    GM.cam.y = clamp(E.player.y - worldCv.height / 2, 0, MH * T - worldCv.height);
+    initAmbientParticles();
+  };
+  GM.newGame = function () {
+    C.save.clear(); UI.modal = null; GM.setup(null); GM.mode = 'play'; sleeping = false; fade = 0; fadeDir = 0;
+    C.save.save();
+    setTimeout(() => { if (GM.mode === 'play' && !UI.modal) { const key = EC.readMail(); if (key) { UI.open('letter', { key }); C.audio.sfx('letter'); } } }, 1200);
+    setTimeout(() => UI.hint(EC.currentHint()), 4000);
+  };
+  GM.continueGame = function () { UI.modal = null; GM.mode = 'play'; const h = EC.currentHint(); if (h) UI.hint(h); };
+  GM.toggleLang = function () { const s = C.save.settings; s.lang = s.lang === 'es' ? 'en' : 'es'; C.setLang(s.lang); C.save.saveSettings(); if (UI.hintText) UI.hintText = EC.currentHint(); };
+
+  GM.resize = function () {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const cw = window.innerWidth, ch = window.innerHeight;
+    GM.dpr = dpr; GM.cssW = cw; GM.cssH = ch;
+    canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+    canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+    GM.scale = clamp(Math.round(Math.min(cw, ch) / (T * 17)), 2, 6);
+    const ww = Math.ceil(cw / GM.scale) + 1, wh = Math.ceil(ch / GM.scale) + 1;
+    worldCv.width = Math.min(ww, MW * T); worldCv.height = Math.min(wh, MH * T);
+    lightCv.width = worldCv.width; lightCv.height = worldCv.height;
+    worldG.imageSmoothingEnabled = false; lightG.imageSmoothingEnabled = false;
+    UI.resize(cw, ch);
+    // safe-area probe
+    try {
+      let probe = document.getElementById('safeprobe');
+      if (!probe) { probe = document.createElement('div'); probe.id = 'safeprobe'; probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left)'; document.body.appendChild(probe); }
+      const cs = getComputedStyle(probe);
+      UI.safe = { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+    } catch (e) { /* ignore */ }
+  };
+
+  // ---- coordinate helpers -------------------------------------------------------------------
+  GM.worldToScreen = (wx, wy) => [(wx - GM.cam.x) * GM.scale, (wy - GM.cam.y) * GM.scale];
+  GM.screenToWorld = (sx, sy) => [GM.cam.x + sx / GM.scale, GM.cam.y + sy / GM.scale];
+  GM.screenToTile = (sx, sy) => { const [wx, wy] = GM.screenToWorld(sx, sy); return [Math.floor(wx / T), Math.floor(wy / T)]; };
+
+  // ---- loop ----------------------------------------------------------------------------------
+  function loop(now) {
+    const dt = Math.min(0.05, (now - (lastNow || now)) / 1000); lastNow = now;
+    GM.time += dt;
+    update(dt);
+    render(dt);
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt) {
+    UI.update(dt);
+    const playing = GM.mode === 'play';
+    if (playing && !UI.pausesTime() && !sleeping) {
+      W.tick(dt);
+      E.update(dt);
+      EC.update(dt);
+      autosaveT += dt; if (autosaveT > 25) { autosaveT = 0; C.save.save(); }
+    } else if (playing && UI.modal && UI.modal.type === 'order') {
+      E.update(dt); // customers keep waiting while you decide
+    }
+    // camera follow
+    const p = E.player;
+    const tx = clamp(p.x - worldCv.width / 2, 0, MW * T - worldCv.width), ty = clamp(p.y - 6 - worldCv.height / 2, 0, MH * T - worldCv.height);
+    const k = 1 - Math.exp(-dt * 5);
+    GM.cam.x = lerp(GM.cam.x, tx, k); GM.cam.y = lerp(GM.cam.y, ty, k);
+    // fade
+    if (fadeDir) { fade = clamp(fade + fadeDir * dt * 1.6, 0, 1); if (fade === 1 && fadeDir > 0) { fadeDir = 0; onFadedOut(); } if (fade === 0 && fadeDir < 0) fadeDir = 0; }
+    updateParticles(dt);
+    // audio env
+    const night = 1 - W.daylight();
+    C.audio.env.rain = C.state.weather === 'rain' ? 1 : 0; C.audio.env.night = night; C.audio.env.snow = C.state.weather === 'snow' ? 1 : 0;
+    C.audio.update(dt);
+    if (tapMark) { tapMark.t += dt; if (tapMark.t > 0.5) tapMark = null; }
+  }
+
+  // ---- sleep / day cycle ------------------------------------------------------------------------
+  GM.sleep = function () {
+    if (sleeping) return; sleeping = true; E.stop(E.player); GM.pending = null;
+    C.audio.sfx('sleep'); fadeDir = 1; UI.modal = null;
+  };
+  function onFadedOut() {
+    const today = { ...C.state.today };
+    W.newDay();
+    E.npcs = [];
+    const p = E.player; p.x = 9 * T + 8; p.y = 13 * T + 16; p.tx = 9; p.ty = 13; p.dir = 0; p.path = null;
+    GM.cam.x = clamp(p.x - worldCv.width / 2, 0, MW * T - worldCv.width); GM.cam.y = clamp(p.y - worldCv.height / 2, 0, MH * T - worldCv.height);
+    initAmbientParticles();
+    C.save.save();
+    UI.open('summary', today);
+  }
+  GM.afterSummary = function () {
+    sleeping = false; fadeDir = -1;
+    if (C.state.mail.length && !UI.modal) { setTimeout(() => { if (!UI.modal) { UI.toast(C.t('letter'), 'letter'); } }, 800); }
+  };
+
+  // ---- input: world taps --------------------------------------------------------------------------
+  GM.pending = null;
+  GM.cancelAction = function () { GM.pending = null; E.stop(E.player); };
+  GM.onWorldDown = function () { };
+  GM.onWorldDrag = function () { };
+  GM.onWorldDragEnd = function () { };
+
+  function face(m, tx, ty) { const dx = tx - m.tx, dy = ty - m.ty; if (Math.abs(dx) > Math.abs(dy)) m.dir = dx > 0 ? 2 : 1; else if (dy !== 0) m.dir = dy > 0 ? 0 : 3; }
+  function goThen(stand, fn, tx, ty) {
+    const p = E.player;
+    if (!stand) { C.audio.sfx('error'); return false; }
+    const ok = E.moveTo(p, stand[0], stand[1], () => { face(p, tx, ty); fn(); });
+    if (!ok) C.audio.sfx('error');
+    else EC.tutorialAdvance('hint_tap_move');
+    return ok;
+  }
+  function standFor(tx, ty) { return W.nearestStand(tx, ty, E.player.tx, E.player.ty) || (W.walkable(tx, ty) ? [tx, ty] : null); }
+
+  GM.onWorldTap = function (sx, sy) {
+    if (GM.mode !== 'play' || sleeping) return;
+    const [tx, ty] = GM.screenToTile(sx, sy);
+    if (!W.inMap(tx, ty)) return;
+    tapMark = { x: sx, y: sy, t: 0 };
+    const S = C.state, tool = S.tool, p = E.player, i = W.idx(tx, ty);
+    C.audio.sfx('tap');
+    // customers
+    const cust = E.customerAt(tx, ty);
+    if (cust && cust.state === 'wait') { GM.tapCustomer(cust); return; }
+    // cat & hens
+    if (S.upgrades.cat && Math.abs(E.cat.x - (tx * T + 8)) < 10 && Math.abs(E.cat.y - (ty * T + 14)) < 12) { C.audio.sfx('meow'); E.say(E.cat, '♥', 1.5); burst(E.cat.x, E.cat.y - 10, '#f06a8a', 6); return; }
+    const hen = E.animals.find((h) => h.tx === tx && h.ty === ty); if (hen) { C.audio.sfx('cluck'); burst(hen.x, hen.y - 8, '#f4f4f0', 4); }
+    // interactables
+    const obj = W.interactableAt(tx, ty);
+    if (obj) { goThen(obj.stand || standFor(tx, ty), () => GM.interact(obj), tx, ty); return; }
+    // fishing
+    if (W.ground[i] === C.G.WATER) { if (S.upgrades.rod) goThen(standFor(tx, ty), () => UI.open('fishing'), tx, ty); else goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+    // forage on the ground
+    if (W.forage.has(i)) { goThen([tx, ty], () => pickForage(tx, ty), tx, ty); return; }
+    // crops
+    const crop = W.crops.get(i);
+    if (crop && (tool === 'hand' || tool.endsWith('_seed') || tool === 'hoe')) {
+      if (W.cropRipe(crop)) { goThen(standFor(tx, ty), () => harvest(tx, ty), tx, ty); return; }
+      if (tool === 'water') { /* fallthrough */ } else { goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+    }
+    if (tool === 'hoe') {
+      if (!W.isFarm(tx, ty)) { if (Math.abs(tx - p.tx) + Math.abs(ty - p.ty) < 3) UI.toast(C.t('not_farmland')); goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+      if (W.soil[i]) { goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+      goThen(standFor(tx, ty), () => { if (W.till(tx, ty)) { C.audio.sfx('hoe'); burst(tx * T + 8, ty * T + 8, '#7a5232', 8); EC.tutorialAdvance('hint_hoe'); } }, tx, ty); return;
+    }
+    if (tool === 'water') {
+      if (!W.soil[i]) { goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+      goThen(standFor(tx, ty), () => { if (W.water(tx, ty)) { C.audio.sfx('water'); burst(tx * T + 8, ty * T + 6, '#7ab0e0', 8, true); EC.tutorialAdvance('hint_water'); } }, tx, ty); return;
+    }
+    if (tool.endsWith('_seed')) {
+      if (!W.soil[i] || W.crops.has(i)) { goThen(standFor(tx, ty), () => { }, tx, ty); return; }
+      if (!EC.has(tool)) { UI.toast(C.t('no_seeds')); C.audio.sfx('error'); return; }
+      goThen(standFor(tx, ty), () => {
+        if (!EC.has(tool)) return;
+        const type = C.ITEMS[tool].crop;
+        if (W.plant(tx, ty, type)) { EC.remove(tool, 1); C.audio.sfx('plant'); burst(tx * T + 8, ty * T + 8, '#5cb84a', 6); EC.tutorialAdvance('hint_seed'); if (!EC.has(tool)) S.tool = 'hand'; }
+      }, tx, ty); return;
+    }
+    // plain walk
+    goThen(standFor(tx, ty), () => { }, tx, ty);
+  };
+
+  GM.tapCustomer = function (n) {
+    const stand = [22, 25], p = E.player;
+    if (Math.abs(p.tx - stand[0]) <= 1 && p.ty === stand[1]) { UI.open('order'); return; }
+    goThen(stand, () => UI.open('order'), n.tx, n.ty);
+  };
+  GM.serveCustomer = function (n) {
+    const res = EC.serve(n);
+    if (!res) { C.audio.sfx('error'); return; }
+    C.audio.sfx('pour');
+    UI.toast(C.t('served', { coins: res.coins + res.tip }) + (res.tip ? `  (+${res.tip} ${C.t('tip')})` : ''), 'coin');
+    steam(21 * T, 26 * T + 4);
+    EC.tutorialAdvance('hint_cafe');
+    if (!E.waitingCustomers().length) UI.close();
+  };
+
+  GM.interact = function (obj) {
+    const S = C.state;
+    switch (obj.interact) {
+      case 'house': UI.open('sleep'); break;
+      case 'roaster': if (EC.count('green') <= 0) { UI.toast(C.t('roaster_none'), 'green'); C.audio.sfx('error'); } else { UI.open('roaster'); EC.tutorialAdvance('hint_roaster'); } break;
+      case 'pulper': { const n = ST.pulp(); if (n) { C.audio.sfx('crank'); UI.toast(C.t('pulper_done', { n }), 'parchment'); burst(obj.tx * T + 8, obj.ty * T + 4, '#d42a2a', 6); EC.tutorialAdvance('hint_pulper'); } else { UI.toast(C.t('pulper_none'), 'cherry'); C.audio.sfx('error'); } break; }
+      case 'patio': {
+        const r = ST.patioInteract(), p = S.patio;
+        if (r.action === 'collect') { UI.toast(C.t('patio_collect', { n: r.n }), 'green'); C.audio.sfx('harvest'); }
+        else if (r.action === 'load') { UI.toast(C.t('patio_loaded', { n: r.n }), 'parchment'); C.audio.sfx('plant'); EC.tutorialAdvance('hint_patio'); }
+        else if (r.action === 'full') { UI.toast(C.t('patio_full')); C.audio.sfx('error'); }
+        else if (r.action === 'status') { const raining = (S.weather === 'rain' || S.weather === 'snow') && !S.upgrades.roof; UI.toast(raining ? C.t('patio_rain') : C.t('patio_status', { n: p.n, max: ST.patioCap(), days: Math.max(0, ST.DRY_DAYS - p.days) }), 'parchment'); }
+        else UI.toast(C.t('patio_empty'));
+        break;
+      }
+      case 'counter': UI.open('order'); break;
+      case 'shop': UI.open('shop'); E.say(E.rosa, C.lang === 'es' ? '¡Buenas! ¿Qué se te ofrece?' : 'Hello there! What can I get you?', 3); break;
+      case 'mailbox': { const key = EC.readMail(); if (key) { UI.open('letter', { key }); C.audio.sfx('letter'); } else C.audio.sfx('back'); break; }
+      case 'coop': C.audio.sfx('cluck'); UI.toast(C.t('coop'), 'hens'); break;
+      default: break;
+    }
+  };
+
+  function harvest(tx, ty) {
+    const r = W.harvest(tx, ty); if (!r) return;
+    EC.add(r.item, r.n); C.audio.sfx('harvest');
+    UI.toast(C.t('harvested', { n: r.n, name: EC.itemName(r.item) }), r.item);
+    burst(tx * T + 8, ty * T + 4, r.item === 'cherry' ? '#e04040' : r.item === 'tomato' ? '#e04a30' : r.item === 'corn' ? '#f0d060' : '#f0c020', 10);
+    if (r.item === 'cherry') EC.tutorialAdvance('hint_coffee_done');
+  }
+  function pickForage(tx, ty) {
+    const i = W.idx(tx, ty), t = W.forage.get(i); if (!t) return;
+    W.forage.delete(i); EC.add(t, 1); C.audio.sfx('harvest');
+    UI.toast(t === 'egg' ? C.t('picked_egg') : C.t('foraged', { name: EC.itemName(t) }), t);
+    burst(tx * T + 8, ty * T + 8, t === 'mint' ? '#6ad06a' : t === 'egg' ? '#f8f0e0' : '#f06a8a', 6);
+  }
+
+  // ---- particles --------------------------------------------------------------------------------
+  function burst(x, y, color, n, drip) {
+    for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, s = 12 + Math.random() * 30; particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (drip ? 0 : 20), life: 0.5 + Math.random() * 0.4, t: 0, color, size: 1 + (Math.random() < 0.4 ? 1 : 0), grav: drip ? 90 : 60 }); }
+  }
+  function steam(x, y) { for (let i = 0; i < 10; i++) particles.push({ x: x + Math.random() * 12, y: y, vx: (Math.random() - 0.5) * 6, vy: -14 - Math.random() * 10, life: 1.2 + Math.random(), t: -i * 0.08, color: 'rgba(255,255,255,0.7)', size: 2, grav: -6, steam: true }); }
+  GM.burst = burst;
+  function initAmbientParticles() {
+    fireflies = []; leaves = []; drops = [];
+    const r = C.rng(C.state.time.day * 31);
+    for (let i = 0; i < 34; i++) fireflies.push({ x: r.range(3, MW - 3) * T, y: r.range(3, MH - 3) * T, ph: r() * 6.28, sp: 0.6 + r() * 0.8, r: 6 + r() * 12 });
+    for (let i = 0; i < 90; i++) drops.push({ x: r() * 400, y: r() * 300, s: 130 + r() * 90 });
+    for (let i = 0; i < 16; i++) leaves.push({ x: r() * 400, y: r() * 300, vx: 6 + r() * 10, ph: r() * 6.28, c: r.pick(['#d08a3a', '#c86a3a', '#e0a840']) });
+  }
+  function updateParticles(dt) {
+    for (const p of particles) { p.t += dt; if (p.t < 0) continue; p.vy += (p.grav || 0) * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    particles = particles.filter((p) => p.t < p.life);
+    const wv = worldCv.width, wh = worldCv.height;
+    if (C.state.weather === 'rain') for (const d of drops) { d.y += d.s * dt; d.x -= d.s * 0.25 * dt; if (d.y > wh + 4) { d.y = -6; d.x = Math.random() * (wv + 40); } if (d.x < -4) d.x += wv + 40; }
+    if (C.state.weather === 'snow') for (const d of drops) { d.y += d.s * 0.18 * dt; d.x += Math.sin(GM.time * 1.5 + d.s) * 8 * dt; if (d.y > wh + 4) { d.y = -6; d.x = Math.random() * (wv + 40); } }
+    if (W.season() === 'autumn') for (const l of leaves) { l.x += l.vx * dt; l.y += (12 + Math.sin(GM.time * 2 + l.ph) * 6) * dt; if (l.y > wh + 4) { l.y = -6; l.x = Math.random() * wv; } if (l.x > wv + 4) l.x = -4; }
+  }
+
+  // ---- render -------------------------------------------------------------------------------------
+  function render(dt) {
+    const S = C.state; if (!S) return;
+    const ox = Math.round(GM.cam.x), oy = Math.round(GM.cam.y);
+    const wv = worldCv.width, wh = worldCv.height;
+    const season = W.season(), tiles = SP.tiles(season);
+    const wg = worldG;
+    wg.globalCompositeOperation = 'source-over';
+    wg.fillStyle = '#2a3a22'; wg.fillRect(0, 0, wv, wh);
+    // ground
+    const x0 = Math.max(0, Math.floor(ox / T)), y0 = Math.max(0, Math.floor(oy / T));
+    const x1 = Math.min(MW - 1, Math.ceil((ox + wv) / T)), y1 = Math.min(MH - 1, Math.ceil((oy + wh) / T));
+    const wf = Math.floor(GM.time * 3) % 4, raining = S.weather === 'rain';
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+      const i = W.idx(tx, ty), gnd = W.ground[i], px = tx * T - ox, py = ty * T - oy;
+      let img;
+      switch (gnd) {
+        case C.G.GRASS: img = tiles.grass[W.gvar[i]]; break;
+        case C.G.DIRT: img = tiles.dirt[W.gvar[i] % 3]; break;
+        case C.G.WATER: img = tiles.water[(wf + ((tx + ty) & 1) * 2) % 4]; break;
+        case C.G.SAND: img = tiles.sand; break;
+        case C.G.WOOD: img = tiles.wood; break;
+        case C.G.STONE: img = tiles.stone; break;
+        case C.G.CONCRETE: img = tiles.concrete; break;
+        case C.G.PORCH: img = tiles.porch; break;
+        default: img = tiles.grass[0];
+      }
+      wg.drawImage(img, px, py);
+      if (W.soil[i]) wg.drawImage(W.soil[i] === 2 ? tiles.soilWet : tiles.soil, px, py);
+      if (raining && (gnd === C.G.GRASS || gnd === C.G.DIRT) && !W.soil[i] && C.hash2(tx, ty, 77) < 0.1) wg.drawImage(tiles.puddle, px, py);
+      const f = W.forage.get(i);
+      if (f === 'mint') wg.drawImage(SP.mint(), px, py); else if (f === 'flower') wg.drawImage(SP.flower(i), px, py); else if (f === 'egg') wg.drawImage(SP.icon('egg'), px + 4, py + 5, 8, 8);
+    }
+    // farm zone hint when using hoe
+    if (S.tool === 'hoe') { const fz = W.farmZone; wg.strokeStyle = 'rgba(255,240,180,0.35)'; wg.lineWidth = 1; wg.strokeRect(fz.x0 * T - ox + 0.5, fz.y0 * T - oy + 0.5, (fz.x1 - fz.x0 + 1) * T - 1, (fz.y1 - fz.y0 + 1) * T - 1); }
+    // drawables
+    const list = [];
+    const night = 1 - W.daylight();
+    for (const o of W.objects) {
+      const px = o.px - ox, py = o.py - oy;
+      if (px > wv + 8 || py > wh + 8 || px + o.w * T + 16 < -8 || py + o.h * T + 32 < -8) continue;
+      list.push({ baseY: o.baseY, draw: () => drawObject(wg, o, px, py, season, night) });
+    }
+    for (const [i, c] of W.crops) {
+      const tx = i % MW, ty = Math.floor(i / MW);
+      if (tx < x0 - 1 || tx > x1 + 1 || ty < y0 - 1 || ty > y1 + 1) continue;
+      const st = W.cropStage(c);
+      list.push({ baseY: (ty + 1) * T, draw: () => wg.drawImage(SP.crop(c.type, st), tx * T - ox, ty * T - oy - 8) });
+    }
+    for (const d of E.drawables()) list.push({ baseY: d.baseY, draw: () => d.draw(wg, ox, oy) });
+    list.sort((a, b) => a.baseY - b.baseY);
+    for (const d of list) d.draw();
+    // particles
+    for (const p of particles) { if (p.t < 0) continue; const a = 1 - p.t / p.life; wg.globalAlpha = p.steam ? a * 0.7 : a; wg.fillStyle = p.color; wg.fillRect(Math.round(p.x - ox), Math.round(p.y - oy), p.size, p.size); }
+    wg.globalAlpha = 1;
+    // seasonal ambience
+    if (season === 'autumn' && !raining) for (const l of leaves) { wg.fillStyle = l.c; wg.fillRect(Math.round(l.x), Math.round(l.y), 2, 1); }
+    if (season === 'summer' && night > 0.5) { wg.globalCompositeOperation = 'lighter'; for (const f of fireflies) { const b = 0.5 + 0.5 * Math.sin(GM.time * f.sp * 3 + f.ph); if (b < 0.3) continue; const fx = f.x + Math.sin(GM.time * f.sp + f.ph) * f.r - ox, fy = f.y + Math.cos(GM.time * f.sp * 0.7 + f.ph) * f.r * 0.5 - oy; if (fx < 0 || fy < 0 || fx > wv || fy > wh) continue; wg.fillStyle = `rgba(200,255,120,${b * 0.9})`; wg.fillRect(Math.round(fx), Math.round(fy), 1, 1); wg.fillStyle = `rgba(200,255,120,${b * 0.25})`; wg.fillRect(Math.round(fx) - 1, Math.round(fy) - 1, 3, 3); } wg.globalCompositeOperation = 'source-over'; }
+    // weather
+    if (raining) { wg.strokeStyle = 'rgba(200,225,255,0.55)'; wg.lineWidth = 1; wg.beginPath(); for (const d of drops) { wg.moveTo(d.x, d.y); wg.lineTo(d.x - 1, d.y + 4); } wg.stroke(); }
+    if (S.weather === 'snow') { wg.fillStyle = 'rgba(255,255,255,0.85)'; for (const d of drops) wg.fillRect(Math.round(d.x), Math.round(d.y), 1, 1); }
+    // lighting
+    drawLighting(wg, ox, oy, night);
+    // blit world -> screen
+    const dpr = GM.dpr, sc = GM.scale;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.imageSmoothingEnabled = false;
+    g.fillStyle = '#1a2418'; g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(worldCv, 0, 0, wv, wh, 0, 0, Math.round(wv * sc * dpr), Math.round(wh * sc * dpr));
+    // UI layer in CSS px
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (tapMark) { const a = 1 - tapMark.t / 0.5; g.strokeStyle = `rgba(255,240,200,${a})`; g.lineWidth = 2; g.beginPath(); g.arc(tapMark.x, tapMark.y, 8 + tapMark.t * 40, 0, 7); g.stroke(); }
+    UI.draw(g, dt);
+    if (fade > 0) { g.fillStyle = `rgba(4,6,10,${fade})`; g.fillRect(0, 0, GM.cssW, GM.cssH); if (UI.modal && UI.modal.type === 'summary') UI.draw(g, 0); }
+  }
+
+  function drawObject(wg, o, px, py, season, night) {
+    const S = C.state;
+    switch (o.kind) {
+      case 'tree': wg.drawImage(SP.tree(o.seed, season, o.tkind), px, py); break;
+      case 'house': wg.drawImage(SP.house(), px, py); break;
+      case 'shed': wg.drawImage(SP.shed(), px, py); if (ST.roast && ST.roast.holding) { wg.fillStyle = `rgba(255,${120 + Math.random() * 80 | 0},40,0.5)`; wg.fillRect(px + 34, py + 56, 12, 8); } break;
+      case 'pulper': wg.drawImage(SP.pulper(), px, py); break;
+      case 'patio': wg.drawImage(SP.patio(o.w, o.h, S.upgrades.roof), px, py); if (S.patio.n > 0) wg.drawImage(SP.parchmentDots(Math.min(S.patio.n, 40), o.w, o.h, S.patio.dry), px, py + 16); break;
+      case 'counter': wg.drawImage(SP.counter(), px, py); wg.drawImage(SP.awning(S.upgrades.lights), px, py - 14); break;
+      case 'cart': wg.drawImage(SP.cart(), px, py); break;
+      case 'mailbox': wg.drawImage(SP.mailbox(S.mail.length > 0), px, py); break;
+      case 'well': wg.drawImage(SP.well(), px, py); break;
+      case 'sign': wg.drawImage(SP.sign(), px, py); break;
+      case 'lantern': wg.drawImage(SP.lantern(night > 0.3), px, py); break;
+      case 'pot': wg.drawImage(SP.pot(o.seed), px, py); break;
+      case 'fence': wg.drawImage(SP.fence(o.fk), px, py); break;
+      case 'bush': wg.drawImage(SP.bush(o.seed, season), px, py); break;
+      case 'rock': wg.drawImage(SP.rock(o.seed), px, py); break;
+      case 'stump': wg.drawImage(SP.stump(), px, py); break;
+      case 'dflower': if (season !== 'winter') wg.drawImage(SP.flower(o.seed), px, py); break;
+      case 'reeds': wg.drawImage(SP.reeds(), px, py); break;
+      case 'lily': wg.drawImage(SP.lily(), px, py + Math.round(Math.sin(GM.time * 1.5 + o.tx) * 1)); break;
+      case 'coop': wg.drawImage(SP.coop(), px, py); break;
+      case 'bench': wg.drawImage(SP.bench(), px, py); break;
+      default: break;
+    }
+  }
+
+  function drawLighting(wg, ox, oy, night) {
+    const S = C.state, wv = worldCv.width, wh = worldCv.height;
+    const d = W.daylight(), dusk = 4 * d * (1 - d);
+    const gloomy = S.weather === 'rain' ? 0.16 : S.weather === 'snow' ? 0.08 : S.weather === 'cloudy' ? 0.06 : 0;
+    if (dusk > 0.01) { wg.fillStyle = `rgba(255,140,60,${0.16 * dusk})`; wg.fillRect(0, 0, wv, wh); }
+    if (night < 0.02 && !gloomy) return;
+    const lg = lightG;
+    lg.globalCompositeOperation = 'source-over';
+    lg.clearRect(0, 0, wv, wh);
+    lg.fillStyle = `rgba(14,18,50,${0.68 * night + gloomy})`; lg.fillRect(0, 0, wv, wh);
+    if (night > 0.05) {
+      lg.globalCompositeOperation = 'destination-out';
+      for (const L of W.lights) {
+        const lx = L.x - ox, ly = L.y - oy; if (lx < -60 || ly < -60 || lx > wv + 60 || ly > wh + 60) continue;
+        if (L.kind === 'roaster' && !(ST.roast && ST.roast.holding)) { if (night < 0.5) continue; }
+        const r = L.r * (1 + 0.04 * Math.sin(GM.time * 6 + lx));
+        const gr = lg.createRadialGradient(lx, ly, 0, lx, ly, r);
+        gr.addColorStop(0, `rgba(0,0,0,${0.95 * night})`); gr.addColorStop(0.5, `rgba(0,0,0,${0.6 * night})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+        lg.fillStyle = gr; lg.fillRect(lx - r, ly - r, r * 2, r * 2);
+      }
+      // player carries a little glow at night
+      const p = E.player, plx = p.x - ox, ply = p.y - 8 - oy, pr = 22;
+      const pg = lg.createRadialGradient(plx, ply, 0, plx, ply, pr); pg.addColorStop(0, `rgba(0,0,0,${0.5 * night})`); pg.addColorStop(1, 'rgba(0,0,0,0)'); lg.fillStyle = pg; lg.fillRect(plx - pr, ply - pr, pr * 2, pr * 2);
+    }
+    wg.drawImage(lightCv, 0, 0);
+    if (night > 0.05) {
+      wg.globalCompositeOperation = 'lighter';
+      for (const L of W.lights) {
+        const lx = L.x - ox, ly = L.y - oy; if (lx < -60 || ly < -60 || lx > wv + 60 || ly > wh + 60) continue;
+        if (L.kind === 'roaster' && !(ST.roast && ST.roast.holding) && night < 0.5) continue;
+        const r = L.r * 0.8, gr = wg.createRadialGradient(lx, ly, 0, lx, ly, r);
+        gr.addColorStop(0, C.color.rgba(L.color, 0.28 * night)); gr.addColorStop(1, C.color.rgba(L.color, 0));
+        wg.fillStyle = gr; wg.fillRect(lx - r, ly - r, r * 2, r * 2);
+      }
+      wg.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  // ---- boot -----------------------------------------------------------------------------------
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', GM.init); else GM.init();
+})();
+
+</script>
