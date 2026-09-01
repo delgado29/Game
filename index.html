@@ -2,46 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Cafetal</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Cafetal">
-<meta name="theme-color" content="#1a2418">
-<meta name="description" content="Cafetal — a cozy coffee-farm game. Grow, roast, brew, serve.">
-<!-- build:strip -->
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icons/icon-180.png">
-<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
-<!-- /build:strip -->
+<title>Game Shelf</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a2418; }
-  body { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif; }
-  #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; image-rendering: pixelated; image-rendering: crisp-edges; }
-  #noscript { color: #f4e8d0; padding: 2rem; font-family: system-ui, sans-serif; }
+  :root { --bg: #efe6d3; --ink: #2b2118; --soft: #7a6a58; --card: #fbf5e8; --line: #d8c8a8; --accent: #b8503a; --leaf: #3f8a4a; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #1a2418; --ink: #f4ead8; --soft: #b8a890; --card: #25301f; --line: #3a4a34; --accent: #e07a5a; --leaf: #7cc45c; } }
+  :root[data-theme="dark"] { --bg: #1a2418; --ink: #f4ead8; --soft: #b8a890; --card: #25301f; --line: #3a4a34; --accent: #e07a5a; --leaf: #7cc45c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
+  main { width: min(720px, 100%); }
+  h1 { font-size: clamp(28px, 6vw, 44px); margin: 0 0 4px; letter-spacing: -0.02em; text-wrap: balance; }
+  p.lead { margin: 0 0 28px; color: var(--soft); font-size: 16px; max-width: 60ch; }
+  .shelf { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  a.card { display: grid; grid-template-columns: 72px 1fr; gap: 16px; align-items: center; padding: 18px; border-radius: 18px; background: var(--card); border: 1px solid var(--line); color: inherit; text-decoration: none; transition: transform .15s ease; }
+  a.card:hover, a.card:focus-visible { transform: translateY(-2px); outline: 2px solid var(--accent); outline-offset: 2px; }
+  a.card img { width: 72px; height: 72px; border-radius: 16px; image-rendering: pixelated; }
+  a.card strong { display: block; font-size: 20px; margin-bottom: 4px; }
+  a.card span { color: var(--soft); font-size: 14px; line-height: 1.4; }
+  .tag { display: inline-block; margin-top: 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--leaf); font-weight: 700; }
+  footer { margin-top: 28px; color: var(--soft); font-size: 13px; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<noscript><div id="noscript">Cafetal needs JavaScript.</div></noscript>
-<script src="src/00_util.js"></script>
-<script src="src/01_i18n.js"></script>
-<script src="src/10_sprites.js"></script>
-<script src="src/20_audio.js"></script>
-<script src="src/30_world.js"></script>
-<script src="src/40_entities.js"></script>
-<script src="src/50_stations.js"></script>
-<script src="src/60_economy.js"></script>
-<script src="src/70_ui.js"></script>
-<script src="src/80_save.js"></script>
-<script src="src/90_main.js"></script>
-<!-- build:strip -->
-<script>
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
-  }
-</script>
-<!-- /build:strip -->
+<main>
+  <h1>Game Shelf</h1>
+  <p class="lead">Two small games for the iPad. No images, no audio files, no libraries: every pixel and every note is generated when the page opens. Add either one to your Home Screen for fullscreen play.</p>
+  <div class="shelf">
+    <a class="card" href="cafetal/"><img src="cafetal/icons/icon-192.png" alt=""><div><strong>Cafetal</strong><span>Grow coffee on a mountain farm, dry and roast it, and serve the villagers at your roadside café.</span><em class="tag">farm sim · chill</em></div></a>
+    <a class="card" href="lena/"><img src="lena/icons/icon-192.png" alt=""><div><strong>Leña</strong><span>Tap the tree, sell the wood, hire a crew, build a sawmill, and plant new forests for acorns.</span><em class="tag">incremental · idle</em></div></a>
+  </div>
+  <footer>Progress is saved in your browser, per game.</footer>
+</main>
 </body>
 </html>

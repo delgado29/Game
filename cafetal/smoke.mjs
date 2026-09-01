@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 let pw;
 try { pw = require('playwright'); } catch (e) { pw = require('/opt/node22/lib/node_modules/playwright'); }
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const root = dirname(fileURLToPath(import.meta.url));
 const outDir = process.argv[2] || join(root, 'dist', 'shots');
 const file = process.argv[3] || join(root, 'index.html');
 mkdirSync(outDir, { recursive: true });

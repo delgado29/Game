@@ -25,9 +25,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build single-file bundle and icons
+      - name: Build icons and single-file bundles for every game
         run: |
-          node scripts/icons.mjs
+          node cafetal/icons.mjs
+          node lena/icons.mjs
           node scripts/build.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

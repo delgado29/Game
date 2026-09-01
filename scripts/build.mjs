@@ -1,31 +1,25 @@
-// Bundles index.html + src/*.js into single-file builds (no dependencies).
-//   dist/cafetal.html           full standalone document (open anywhere, host anywhere)
-//   dist/cafetal-artifact.html  body-only fragment for hosts that wrap the page themselves
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+// Bundles <game>/index.html + its src/*.js into single-file builds (no dependencies).
+//   node scripts/build.mjs cafetal     -> cafetal/dist/cafetal.html + cafetal/dist/cafetal-artifact.html
+//   node scripts/build.mjs             -> builds every game folder that has an index.html + src/
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-let html = readFileSync(join(root, 'index.html'), 'utf8');
+const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
+const games = process.argv.slice(2).length ? process.argv.slice(2) : readdirSync(repo).filter((d) => existsSync(join(repo, d, 'index.html')) && existsSync(join(repo, d, 'src')));
 
-// strip PWA-only blocks
-html = html.replace(/<!-- build:strip -->[\s\S]*?<!-- \/build:strip -->\n?/g, '');
-// inline scripts in order
-html = html.replace(/<script src="(src\/[^"]+)"><\/script>/g, (_, p) => {
-  const js = readFileSync(join(root, p), 'utf8').replace(/<\/script>/gi, '<\\/script>');
-  return `<script>\n${js}\n</script>`;
-});
-
-mkdirSync(join(root, 'dist'), { recursive: true });
-writeFileSync(join(root, 'dist', 'cafetal.html'), html);
-
-// fragment: everything between <head> ... </body> minus html/head/body tags
-const title = '<title>Cafetal</title>';
-const style = html.match(/<style>[\s\S]*?<\/style>/)[0];
-const body = html.match(/<body>([\s\S]*?)<\/body>/)[1].trim();
-const fragment = `${title}\n<meta name="apple-mobile-web-app-capable" content="yes">\n${style}\n${body}\n`;
-writeFileSync(join(root, 'dist', 'cafetal-artifact.html'), fragment);
-
-const kb = (s) => (Buffer.byteLength(s) / 1024).toFixed(1) + ' KB';
-console.log('dist/cafetal.html', kb(html));
-console.log('dist/cafetal-artifact.html', kb(fragment));
+for (const game of games) {
+  const root = join(repo, game);
+  let html = readFileSync(join(root, 'index.html'), 'utf8');
+  html = html.replace(/<!-- build:strip -->[\s\S]*?<!-- \/build:strip -->\n?/g, '');
+  html = html.replace(/<script src="(src\/[^"]+)"><\/script>/g, (_, p) => `<script>\n${readFileSync(join(root, p), 'utf8').replace(/<\/script>/gi, '<\\/script>')}\n</script>`);
+  mkdirSync(join(root, 'dist'), { recursive: true });
+  writeFileSync(join(root, 'dist', `${game}.html`), html);
+  const title = html.match(/<title>[\s\S]*?<\/title>/)[0];
+  const style = html.match(/<style>[\s\S]*?<\/style>/)[0];
+  const body = html.match(/<body>([\s\S]*?)<\/body>/)[1].trim();
+  const fragment = `${title}\n<meta name="apple-mobile-web-app-capable" content="yes">\n${style}\n${body}\n`;
+  writeFileSync(join(root, 'dist', `${game}-artifact.html`), fragment);
+  const kb = (s) => (Buffer.byteLength(s) / 1024).toFixed(1) + ' KB';
+  console.log(`${game}/dist/${game}.html ${kb(html)}  ·  ${game}/dist/${game}-artifact.html ${kb(fragment)}`);
+}
