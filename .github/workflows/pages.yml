@@ -29,6 +29,7 @@ jobs:
         run: |
           node cafetal/icons.mjs
           node lena/icons.mjs
+          node hojarasca/icons.mjs
           node scripts/build.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

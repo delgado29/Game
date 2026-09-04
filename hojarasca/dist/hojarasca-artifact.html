@@ -1,0 +1,1015 @@
+<title>Hojarasca</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #2a1e14; }
+  body { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif; }
+  #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+</style>
+<canvas id="game"></canvas>
+<noscript><div style="color:#f4ead8;padding:2rem;font-family:system-ui">Hojarasca needs JavaScript.</div></noscript>
+<script>
+/* Hojarasca — 00_util.js  Namespace, math, RNG, colours, strings EN/ES, events. */
+(function () {
+  'use strict';
+  const H = (window.Hojarasca = window.Hojarasca || {});
+  H.TILE = 16; H.MAP_W = 64; H.MAP_H = 58;
+  H.SAVE_KEY = 'hojarasca.save.v1'; H.SETTINGS_KEY = 'hojarasca.settings.v1';
+  const M = (H.math = {});
+  M.clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  M.lerp = (a, b, t) => a + (b - a) * t;
+  M.easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+  M.angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+  H.rng = function (seed) { let a = (seed >>> 0) || 0x9e3779b9; const r = function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; r.int = (n) => Math.floor(r() * n); r.range = (a, b) => a + r() * (b - a); r.pick = (arr) => arr[Math.floor(r() * arr.length)]; r.chance = (p) => r() < p; r.gauss = () => (r() + r() + r() - 1.5) * 2; return r; };
+  H.hash = (x, y, s) => { let h = (x * 374761393 + y * 668265263 + (s | 0) * 982451653) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const Col = (H.color = {});
+  Col.parse = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; };
+  Col.hex = (r, g, b) => '#' + [r, g, b].map((v) => M.clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0')).join('');
+  Col.mix = (a, b, t) => { const A = Col.parse(a), B = Col.parse(b); return Col.hex(M.lerp(A[0], B[0], t), M.lerp(A[1], B[1], t), M.lerp(A[2], B[2], t)); };
+  Col.shade = (h, k) => { const [r, g, b] = Col.parse(h); return Col.hex(r * k, g * k, b * k); };
+  Col.lighten = (h, k) => Col.mix(h, '#ffffff', k);
+  Col.rgba = (h, a) => { const [r, g, b] = Col.parse(h); return `rgba(${r},${g},${b},${a})`; };
+  H.canvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  H.ctx2d = (cv) => { const g = cv.getContext('2d'); g.imageSmoothingEnabled = false; return g; };
+  H.now = () => (window.performance ? performance.now() : Date.now());
+  H.fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 10000 ? (n / 1000).toFixed(1) + 'K' : String(Math.floor(n)));
+  H.fmtTime = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`; };
+  const listeners = {};
+  H.on = (ev, fn) => { (listeners[ev] = listeners[ev] || []).push(fn); };
+  H.emit = (ev, d) => { const l = listeners[ev]; if (l) for (const fn of l) fn(d); };
+
+  const S = {
+    en: {
+      title: 'Hojarasca', tagline: 'leave no leaf behind', tap_start: 'Tap to start', continue_game: 'Continue', new_game: 'New game', new_confirm: 'Start over? The whole property will be covered in leaves again.',
+      coins: 'coins', bag: 'Bag', bag_full: 'Bag full! Dump it in the bin.', dumped: '+{n} coins', leaves: 'leaves', clean: 'clean',
+      z_front: 'Front yard', z_drive: 'Driveway', z_back: 'Backyard', z_pool: 'Pool deck', z_green: 'Greenhouse', z_cellar: 'Cellar',
+      tool_hand: 'Hands', tool_rake: 'Rake', tool_blower: 'Blower',
+      shop: 'Shop', tab_tools: 'Tools', tab_body: 'Gear', tab_yard: 'Yard', buy: 'Buy', owned: 'Owned', max: 'MAX', lv: 'Lv', not_enough: 'Not enough coins', locked: 'Locked',
+      up_bag: 'Bigger bag', up_bag_d: 'Holds {n} leaves', up_rake: 'Rake', up_rake_d: 'Drags a {w}-tile wide swath of leaves', up_rake_buy: 'Pull heaps of leaves along with you',
+      up_blower: 'Leaf blower', up_blower_d: 'Power {p} · reach {r} tiles', up_blower_buy: 'Push whole heaps into bins and vents', up_shoes: 'Running shoes', up_shoes_d: 'Walk speed {s}', up_gloves: 'Grabby gloves', up_gloves_d: 'Pick up {n} leaves/s within reach',
+      vent: 'Vent', vent_d: 'Sucks in nearby leaves and sells them for you', bin: 'Trash bin', bin_d: 'A second bin so you dump closer', gate: 'Gate', gate_d: 'Opens the way to the {zone}',
+      gate_q: 'Open the gate to the {zone} for {n} coins?', gate_locked_cellar: 'The cellar hatch is stuck. Clean every zone to at least 95% first.', yes: 'Yes', no: 'No', ok: 'Okay', close: 'Close',
+      zone_done: '{zone} spotless!', bonus_front: 'Leaves now sell for 25% more', bonus_drive: 'You walk 15% faster', bonus_back: 'Blower power up 30%', bonus_pool: 'Vents reach 50% further', bonus_green: 'Bag capacity doubled', bonus_cellar: 'You found the secret room',
+      ending_title: 'The secret room', ending_body: 'Under the house, behind the vent, someone left a warm room with a kettle, a chair and a single golden leaf on the table. The property is clean. The season is over. Sit a while.',
+      st_leaves: 'Leaves collected', st_coins: 'Coins earned', st_time: 'Time', st_dumps: 'Trips to the bin', st_blown: 'Leaves blown', golden: 'Golden leaf',
+      settings: 'Settings', language: 'Language', music: 'Music', sound: 'Sound', on: 'On', off: 'Off',
+      hint_move: 'Left thumb: walk. Walk over leaves to pick them up.', hint_dump: 'Your bag fills up. Dump it in the trash bin by the porch.', hint_shop: 'Tap the bin to open the shop. A rake is a good start.', hint_rake: 'Right thumb: aim and hold to rake. Drag heaps to the bin.', hint_blower: 'Right thumb: aim and hold to blow. Push leaves into the bin or a vent.', hint_gate: 'Gates open new zones. Walk into one to see the price.',
+      wind: 'A gust of wind!', achievements: 'Achievements', percent_total: 'Property',
+    },
+    es: {
+      title: 'Hojarasca', tagline: 'ni una hoja atrás', tap_start: 'Toca para empezar', continue_game: 'Continuar', new_game: 'Nueva partida', new_confirm: '¿Empezar de nuevo? Toda la finca volverá a llenarse de hojas.',
+      coins: 'monedas', bag: 'Bolsa', bag_full: '¡Bolsa llena! Vacíala en el basurero.', dumped: '+{n} monedas', leaves: 'hojas', clean: 'limpio',
+      z_front: 'Jardín delantero', z_drive: 'Entrada', z_back: 'Patio trasero', z_pool: 'Piscina', z_green: 'Invernadero', z_cellar: 'Sótano',
+      tool_hand: 'Manos', tool_rake: 'Rastrillo', tool_blower: 'Soplador',
+      shop: 'Tienda', tab_tools: 'Herramientas', tab_body: 'Equipo', tab_yard: 'Finca', buy: 'Comprar', owned: 'Tuyo', max: 'MÁX', lv: 'Nv', not_enough: 'No alcanza', locked: 'Bloqueado',
+      up_bag: 'Bolsa más grande', up_bag_d: 'Guarda {n} hojas', up_rake: 'Rastrillo', up_rake_d: 'Arrastra una franja de {w} casillas de hojas', up_rake_buy: 'Arrastra montones de hojas contigo',
+      up_blower: 'Soplador', up_blower_d: 'Potencia {p} · alcance {r} casillas', up_blower_buy: 'Empuja montones enteros a basureros y rejillas', up_shoes: 'Zapatillas', up_shoes_d: 'Velocidad {s}', up_gloves: 'Guantes ágiles', up_gloves_d: 'Recoge {n} hojas/s a tu alcance',
+      vent: 'Rejilla', vent_d: 'Aspira las hojas cercanas y las vende por ti', bin: 'Basurero', bin_d: 'Un segundo basurero para vaciar más cerca', gate: 'Portón', gate_d: 'Abre el paso a {zone}',
+      gate_q: '¿Abrir el portón a {zone} por {n} monedas?', gate_locked_cellar: 'La trampilla del sótano está atascada. Limpia cada zona al menos al 95% primero.', yes: 'Sí', no: 'No', ok: 'Vale', close: 'Cerrar',
+      zone_done: '¡{zone} impecable!', bonus_front: 'Las hojas se venden 25% más caras', bonus_drive: 'Caminas 15% más rápido', bonus_back: 'Soplador 30% más potente', bonus_pool: 'Las rejillas alcanzan 50% más', bonus_green: 'Capacidad de la bolsa duplicada', bonus_cellar: 'Encontraste el cuarto secreto',
+      ending_title: 'El cuarto secreto', ending_body: 'Bajo la casa, detrás de la rejilla, alguien dejó un cuarto cálido con una tetera, una silla y una sola hoja dorada sobre la mesa. La finca está limpia. La temporada terminó. Quédate un rato.',
+      st_leaves: 'Hojas recogidas', st_coins: 'Monedas ganadas', st_time: 'Tiempo', st_dumps: 'Viajes al basurero', st_blown: 'Hojas sopladas', golden: 'Hoja dorada',
+      settings: 'Ajustes', language: 'Idioma', music: 'Música', sound: 'Sonido', on: 'Sí', off: 'No',
+      hint_move: 'Pulgar izquierdo: caminar. Pasa sobre las hojas para recogerlas.', hint_dump: 'La bolsa se llena. Vacíala en el basurero junto al porche.', hint_shop: 'Toca el basurero para abrir la tienda. Un rastrillo es un buen comienzo.', hint_rake: 'Pulgar derecho: apunta y mantén para rastrillar. Arrastra montones al basurero.', hint_blower: 'Pulgar derecho: apunta y mantén para soplar. Empuja hojas al basurero o a una rejilla.', hint_gate: 'Los portones abren zonas nuevas. Acércate a uno para ver el precio.',
+      wind: '¡Una ráfaga de viento!', achievements: 'Logros', percent_total: 'Finca',
+    },
+  };
+  H.lang = 'en'; H.setLang = (l) => { H.lang = S[l] ? l : 'en'; };
+  H.t = (key, vars) => { let s = (S[H.lang] && S[H.lang][key]) || S.en[key] || key; if (vars) for (const k in vars) s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]); return s; };
+})();
+
+</script>
+<script>
+/* Hojarasca — 10_art.js  Procedural pixel art: autumn tiles, house, greenhouse, trees, props, leaves, player, icons. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const Col = H.color, T = H.TILE;
+  function sprite(w, h, fn) {
+    const cv = H.canvas(w, h), g = H.ctx2d(cv);
+    const P = { w, h, g, cv,
+      px(x, y, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, 1, 1); },
+      rect(x, y, w, h, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, w | 0, h | 0); },
+      hline(x, y, w, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, w | 0, 1); },
+      vline(x, y, h, c) { g.fillStyle = c; g.fillRect(x | 0, y | 0, 1, h | 0); },
+      disc(cx, cy, r, c) { g.fillStyle = c; for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) { const dx = x + 0.5 - cx, dy = y + 0.5 - cy; if (dx * dx + dy * dy <= r * r) g.fillRect(x, y, 1, 1); } },
+      ellipse(cx, cy, rx, ry, c) { g.fillStyle = c; for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) { const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry; if (dx * dx + dy * dy <= 1) g.fillRect(x, y, 1, 1); } },
+      tri(cx, top, w, h, c) { g.fillStyle = c; for (let y = 0; y < h; y++) { const ww = Math.round((y / h) * w); g.fillRect(Math.round(cx - ww / 2), top + y, Math.max(1, ww), 1); } },
+      line(x0, y0, x1, y1, c) { g.fillStyle = c; x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0; const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1; let err = dx + dy; for (;;) { g.fillRect(x0, y0, 1, 1); if (x0 === x1 && y0 === y1) break; const e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; } } },
+      blit(img, x, y) { g.drawImage(img, x | 0, y | 0); } };
+    fn(P, g); return cv;
+  }
+  H.sprite = sprite;
+  const A = (H.art = {});
+  const cache = new Map(); const memo = (k, fn) => { if (!cache.has(k)) cache.set(k, fn()); return cache.get(k); }; A.memo = memo;
+
+  // ---- ground tiles -----------------------------------------------------------------------------
+  A.tiles = () => memo('tiles', () => {
+    const t = {};
+    t.grass = [0, 1, 2, 3].map((v) => sprite(T, T, (P) => { const r = H.rng(100 + v); P.rect(0, 0, T, T, '#7a9a48'); for (let i = 0; i < 24; i++) P.px(r.int(T), r.int(T), r.chance(0.5) ? '#88a850' : '#6e8c40'); for (let i = 0; i < 4 + v; i++) { const x = r.int(T), y = r.int(T - 2); P.vline(x, y, 2, '#5e7c36'); } if (v === 3) P.px(r.int(T), r.int(T), '#c8b060'); }));
+    t.path = sprite(T, T, (P) => { const r = H.rng(200); P.rect(0, 0, T, T, '#b8a888'); P.rect(1, 1, 6, 6, '#c8b898'); P.rect(9, 1, 6, 6, '#c0b090'); P.rect(1, 9, 6, 6, '#c0b090'); P.rect(9, 9, 6, 6, '#c8b898'); for (let i = 0; i < 6; i++) P.px(r.int(T), r.int(T), '#a89878'); });
+    t.concrete = sprite(T, T, (P) => { const r = H.rng(300); P.rect(0, 0, T, T, '#a8a49c'); for (let i = 0; i < 14; i++) P.px(r.int(T), r.int(T), '#9c9890'); P.hline(0, 0, T, '#948f86'); P.vline(0, 0, T, '#948f86'); });
+    t.water = [0, 1, 2, 3].map((f) => sprite(T, T, (P) => { P.rect(0, 0, T, T, '#4aa0c8'); const r = H.rng(400); for (let i = 0; i < 5; i++) { const x = (r.int(T) + f * 2) % T, y = (r.int(T) + f) % T; P.hline(x, y, 3, '#7ac0e0'); P.px(x + 1, y, '#a8dcf0'); } }));
+    t.deck = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#b08a5a'); for (let y = 0; y < T; y += 4) P.hline(0, y, T, '#8e6c42'); P.px(3, 2, '#7a5a34'); P.px(11, 10, '#7a5a34'); });
+    t.glass = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#bfe0d8'); P.rect(1, 1, 14, 14, '#cfeae2'); P.hline(0, 0, T, '#8ab0a8'); P.vline(0, 0, T, '#8ab0a8'); P.px(3, 3, '#e8f8f4'); });
+    t.stone = sprite(T, T, (P) => { const r = H.rng(600); P.rect(0, 0, T, T, '#5a5a62'); P.hline(0, 7, T, '#46464e'); P.vline(7, 0, 8, '#46464e'); P.vline(3, 8, 8, '#46464e'); P.vline(12, 8, 8, '#46464e'); for (let i = 0; i < 5; i++) P.px(r.int(T), r.int(T), '#66666e'); });
+    t.soil = sprite(T, T, (P) => { const r = H.rng(700); P.rect(0, 0, T, T, '#6a4a30'); for (let i = 0; i < 10; i++) P.px(r.int(T), r.int(T), '#7a5a3a'); for (let i = 0; i < 3; i++) { const x = 2 + r.int(12); P.vline(x, 6 + r.int(4), 4, '#4a8a3a'); P.px(x - 1, 6 + r.int(3), '#6ab04a'); } });
+    t.sand = sprite(T, T, (P) => { const r = H.rng(800); P.rect(0, 0, T, T, '#e0cc90'); for (let i = 0; i < 12; i++) P.px(r.int(T), r.int(T), '#d0bc80'); });
+    t.road = sprite(T, T, (P) => { const r = H.rng(900); P.rect(0, 0, T, T, '#4a4a50'); for (let i = 0; i < 8; i++) P.px(r.int(T), r.int(T), '#54545a'); });
+    t.sidewalk = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#bab6ae'); P.hline(0, 0, T, '#a4a098'); P.vline(0, 0, T, '#a4a098'); });
+    t.porch = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#c09a68'); for (let x = 0; x < T; x += 4) P.vline(x, 0, T, '#a07c50'); });
+    t.void = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#1a1410'); });
+    t.rug = sprite(T, T, (P) => { P.rect(0, 0, T, T, '#8a3a3a'); P.rect(2, 2, 12, 12, '#a84a4a'); P.rect(4, 4, 8, 8, '#8a3a3a'); });
+    return t;
+  });
+
+  // ---- leaves ---------------------------------------------------------------------------------------
+  A.LEAF_COLORS = [['#d8502a', '#f07a40'], ['#e08a30', '#f0aa50'], ['#d8b040', '#f0d060'], ['#8a5a2a', '#a8743a'], ['#e8c040', '#fff0a0']]; // red, orange, yellow, brown, golden
+  A.leaf = (type, frame) => memo('leaf' + type + frame, () => sprite(5, 5, (P) => {
+    const [a, b] = A.LEAF_COLORS[type];
+    if (frame === 0) { P.rect(1, 1, 3, 3, a); P.px(2, 1, b); P.px(1, 4, Col.shade(a, 0.8)); }
+    else if (frame === 1) { P.rect(0, 2, 5, 1, a); P.rect(1, 1, 3, 3, a); P.px(3, 1, b); P.px(0, 2, Col.shade(a, 0.8)); }
+    else if (frame === 2) { P.rect(2, 0, 1, 5, a); P.rect(1, 1, 3, 3, a); P.px(1, 3, b); P.px(2, 0, Col.shade(a, 0.8)); }
+    else { P.px(1, 1, a); P.px(2, 2, a); P.px(3, 3, a); P.px(3, 1, a); P.px(1, 3, a); P.px(2, 1, b); P.px(2, 3, a); P.px(1, 2, a); P.px(3, 2, a); }
+  }));
+
+  // ---- trees, bushes --------------------------------------------------------------------------------
+  A.tree = (kind, seed) => memo('tree' + kind + seed, () => sprite(40, 48, (P) => {
+    const r = H.rng(seed * 17 + 3);
+    const trunk = kind === 'birch' ? '#e6e2d6' : '#6b4a2b', trunkD = kind === 'birch' ? '#9a968a' : '#4e3620';
+    P.rect(18, 30, 4, 18, trunk); P.vline(18, 30, 18, trunkD); if (kind === 'birch') for (let y = 32; y < 46; y += 4) P.rect(19 + r.int(2), y, 2, 1, '#3a3a3a');
+    if (kind === 'pine') { const c1 = '#2f6e3a', c2 = '#3f8a4a'; for (let i = 0; i < 5; i++) { const y = 6 + i * 6, w = 8 + i * 5; P.tri(20, y, w, 10, i % 2 ? c1 : c2); } P.tri(20, 2, 4, 6, c2); return; }
+    const pal = kind === 'maple' ? ['#d0602a', '#e88a3a', '#b84a2a'] : kind === 'oak' ? ['#c8862a', '#e0a840', '#a86a20'] : ['#d8b040', '#f0d060', '#b89030'];
+    const blobs = [[20, 18, 15, 12], [12 + r.int(4), 22, 9, 7], [26 + r.int(4), 21, 9, 7], [20, 10 + r.int(3), 10, 7]];
+    blobs.forEach((b, i) => P.ellipse(b[0], b[1], b[2], b[3], pal[i % 2 ? 1 : 0]));
+    P.ellipse(16, 15, 6, 4, pal[2]);
+    for (let i = 0; i < 16; i++) P.px(6 + r.int(28), 8 + r.int(20), pal[2]);
+    for (let i = 0; i < 12; i++) P.px(6 + r.int(28), 6 + r.int(18), Col.lighten(pal[1], 0.2));
+    // bare patches: autumn thinning
+    for (let i = 0; i < 6; i++) { const x = 8 + r.int(24), y = 8 + r.int(18); P.px(x, y, trunkD); }
+  }));
+  A.bush = (seed) => memo('bush' + seed, () => sprite(16, 16, (P) => { const r = H.rng(seed); P.ellipse(8, 10, 7, 5, '#4f7a3a'); P.ellipse(6, 9, 4, 3, '#6a9a4a'); P.px(10, 7, '#3a6a2a'); for (let i = 0; i < 3; i++) P.px(3 + r.int(10), 7 + r.int(6), '#e08a30'); }));
+  A.hedge = () => memo('hedge', () => sprite(16, 20, (P) => { P.rect(1, 4, 14, 16, '#3f6e30'); P.rect(1, 4, 14, 2, '#5a8a44'); for (let i = 0; i < 12; i++) P.px(2 + H.hash(i, 1, 4) * 12 | 0, 6 + H.hash(i, 2, 4) * 12 | 0, '#4f7e38'); P.rect(1, 19, 14, 1, '#2e5222'); }));
+
+  // ---- buildings ------------------------------------------------------------------------------------
+  A.house = () => memo('house', () => sprite(16 * T, 15 * T, (P) => {
+    const wall = '#f0e4c8', wallD = '#d8c8a4', roof = '#8a4a3a', roofD = '#6a3628', roofL = '#a45a48', wood = '#6a4a2a', win = '#8ac0e0';
+    const W = 16 * T, wallTop = 56, base = 15 * T;
+    P.rect(4, wallTop, W - 8, base - wallTop, wall); P.rect(4, base - 6, W - 8, 6, wallD);
+    for (let y = 0; y < wallTop; y++) { const inset = Math.max(0, 10 - y / 3); P.hline(inset, y + 4, W - inset * 2, y % 4 === 0 ? roofD : y % 4 === 2 ? roofL : roof); }
+    P.hline(0, wallTop + 2, W, roofD); P.hline(0, wallTop + 1, W, roofD);
+    const winf = (x, y) => { P.rect(x, y, 16, 14, wood); P.rect(x + 2, y + 2, 12, 10, win); P.vline(x + 8, y + 2, 10, wood); P.hline(x + 2, y + 7, 12, wood); P.rect(x - 1, y + 14, 18, 2, '#c8b48a'); };
+    winf(20, 72); winf(60, 72); winf(100, 72); winf(20, 120); winf(100, 120);
+    // door
+    P.rect(112 - 2, 200, 22, 40, wood); P.rect(112, 202, 18, 36, '#8a6238'); P.px(126, 220, '#f0d060');
+    // garage on the east side
+    P.rect(176, 150, 72, 90, '#c8c0b0'); P.rect(180, 156, 64, 80, '#a8a098'); for (let y = 160; y < 236; y += 10) P.hline(180, y, 64, '#8a847c'); P.rect(176, 148, 72, 3, '#7a746c');
+    // chimney, porch lamp
+    P.rect(40, 0, 12, 24, '#8a7a6a'); P.rect(40, 0, 12, 3, '#6a5a4a');
+    P.rect(140, 206, 4, 6, '#3a3a3a'); P.px(141, 208, '#ffe080'); P.px(142, 208, '#ffe080');
+    // ivy on the west wall
+    for (let i = 0; i < 40; i++) P.px(6 + (H.hash(i, 7, 9) * 10 | 0), wallTop + 10 + (H.hash(i, 8, 9) * 160 | 0), i % 3 ? '#4f7a3a' : '#c8862a');
+  }));
+  A.greenhouse = () => memo('greenhouse', () => sprite(14 * T, 10 * T + 24, (P) => {
+    const frame = '#8ab0a8', glass = 'rgba(190,230,222,0.55)', frameD = '#5a8078';
+    const W = 14 * T, Hh = 10 * T + 24;
+    // roof (transparent-ish glass) then walls
+    for (let y = 0; y < 24; y++) { const inset = Math.max(0, 12 - y / 2); P.hline(inset, y, W - inset * 2, y % 6 === 0 ? frame : glass); }
+    P.rect(0, 24, W, Hh - 24, glass);
+    for (let x = 0; x < W; x += 16) P.vline(x, 20, Hh - 20, frame); P.vline(W - 1, 20, Hh - 20, frame);
+    for (let y = 24; y < Hh; y += 16) P.hline(0, y, W, frame);
+    P.rect(0, Hh - 3, W, 3, frameD);
+    // door gap at bottom centre (cols 6..7)
+    P.rect(6 * T + 2, Hh - 22, 28, 22, '#4a7a6a'); P.rect(6 * T + 4, Hh - 20, 24, 18, glass); P.px(6 * T + 25, Hh - 12, '#f0d060');
+  }));
+  A.shed = () => memo('shed', () => sprite(4 * T, 4 * T, (P) => { const wood = '#8a6238', woodD = '#6a4a2a'; P.rect(2, 20, 60, 44, wood); for (let x = 2; x < 62; x += 5) P.vline(x, 20, 44, woodD); for (let y = 0; y < 20; y++) { const inset = Math.max(0, 6 - y / 2); P.hline(inset, y + 2, 64 - inset * 2, y % 3 ? '#9aa4aa' : '#7a848a'); } P.rect(26, 40, 14, 24, '#3a2a1e'); P.rect(6, 28, 12, 10, '#8ac0e0'); }));
+  A.car = () => memo('car', () => sprite(4 * T, 4 * T + 8, (P) => { const body = '#c8443a', bodyD = '#8a2e28', bodyL = '#e06a5a'; P.rect(6, 16, 52, 44, body); P.rect(6, 16, 52, 3, bodyL); P.rect(10, 4, 44, 14, bodyD); P.rect(12, 20, 40, 14, '#6a8aa8'); P.rect(12, 40, 40, 12, '#6a8aa8'); P.rect(6, 56, 52, 6, bodyD); P.rect(2, 14, 6, 12, '#2a2a2a'); P.rect(56, 14, 6, 12, '#2a2a2a'); P.rect(2, 46, 6, 12, '#2a2a2a'); P.rect(56, 46, 6, 12, '#2a2a2a'); P.rect(20, 60, 24, 4, '#e0e0e0'); P.px(10, 60, '#ffe080'); P.px(52, 60, '#ffe080'); }));
+  A.bin = (open) => memo('bin' + open, () => sprite(18, 24, (P) => { P.rect(2, 8, 14, 16, '#4a6a4a'); P.rect(2, 8, 14, 2, '#5a7a5a'); P.vline(5, 10, 14, '#3a5a3a'); P.vline(9, 10, 14, '#3a5a3a'); P.vline(13, 10, 14, '#3a5a3a'); P.rect(0, 5, 18, 4, open ? '#3a5a3a' : '#5a7a5a'); if (open) { P.rect(1, 1, 16, 4, '#5a7a5a'); P.rect(3, 6, 12, 3, '#1a2a1a'); } P.rect(3, 22, 12, 2, '#2a3a2a'); P.px(8, 14, '#c8c8c8'); P.px(9, 14, '#c8c8c8'); }));
+  A.vent = (f) => memo('vent' + f, () => sprite(16, 16, (P) => { P.rect(1, 1, 14, 14, '#4a4a4a'); P.rect(2, 2, 12, 12, '#2a2a2a'); for (let y = 3; y < 14; y += 3) P.hline(3, y + ((f + y / 3) % 2 | 0), 10, '#6a6a6a'); P.rect(1, 1, 14, 1, '#7a7a7a'); P.rect(1, 1, 1, 14, '#7a7a7a'); }));
+  A.ventOff = () => memo('ventoff', () => sprite(16, 16, (P) => { P.rect(2, 2, 12, 12, 'rgba(0,0,0,0.25)'); P.rect(3, 3, 10, 10, '#6a6a5a'); P.rect(5, 5, 6, 6, '#8a8a7a'); }));
+  A.hatch = () => memo('hatch', () => sprite(20, 16, (P) => { P.rect(0, 2, 20, 14, '#5a4a3a'); P.rect(2, 4, 16, 10, '#7a6a5a'); P.hline(2, 8, 16, '#5a4a3a'); P.rect(8, 6, 4, 2, '#c8c8c8'); P.rect(0, 0, 20, 2, '#6a5a4a'); }));
+  A.ladder = () => memo('ladder', () => sprite(12, 24, (P) => { P.vline(2, 0, 24, '#a8784a'); P.vline(9, 0, 24, '#a8784a'); for (let y = 2; y < 24; y += 5) P.hline(3, y, 6, '#c8a068'); }));
+  A.fence = (kind) => memo('fence' + kind, () => sprite(T, T, (P) => { const w = '#d8d0c0', d = '#a8a090'; if (kind === 'h' || kind === 'x') { P.rect(0, 5, 16, 2, w); P.rect(0, 10, 16, 2, w); } if (kind === 'v' || kind === 'x') P.rect(7, 0, 2, 16, w); P.rect(6, 2, 4, 12, w); P.rect(6, 2, 4, 1, '#f0ece0'); P.rect(6, 13, 4, 1, d); if (kind === 'v' || kind === 'x') P.px(7, 0, '#f0ece0'); }));
+  A.gate = (open) => memo('gate' + open, () => sprite(16, 20, (P) => { const w = '#c8a068', d = '#8a6a3a'; P.rect(1, 0, 3, 20, d); P.rect(12, 0, 3, 20, d); if (!open) { P.rect(3, 6, 10, 2, w); P.rect(3, 12, 10, 2, w); P.line(3, 14, 12, 6, w); P.rect(7, 4, 2, 12, '#3a3a3a'); } else { P.rect(3, 6, 4, 2, w); P.rect(3, 12, 4, 2, w); } P.rect(1, 0, 3, 1, '#e0c080'); P.rect(12, 0, 3, 1, '#e0c080'); }));
+  A.lantern = (on) => memo('lantern' + on, () => sprite(16, 24, (P) => { P.rect(7, 8, 2, 16, '#4a4a4a'); P.rect(5, 2, 6, 7, '#3a3a3a'); P.rect(6, 3, 4, 5, on ? '#ffe080' : '#a0a0a0'); }));
+  A.mailbox = () => memo('mailbox', () => sprite(16, 24, (P) => { P.rect(7, 12, 2, 12, '#6a4a2a'); P.rect(3, 5, 10, 8, '#4a6a9a'); P.rect(3, 4, 10, 1, '#6a8aba'); P.px(11, 9, '#f0d060'); P.rect(13, 3, 1, 7, '#d83a2a'); }));
+  A.pot = (seed) => memo('pot' + seed, () => sprite(T, T, (P) => { P.rect(4, 9, 8, 6, '#b8603a'); P.rect(3, 8, 10, 2, '#d07a4a'); const r = H.rng(seed); const c = r.pick(['#e08a30', '#f0c040', '#ffffff']); P.rect(5, 5, 6, 4, '#4a8a3a'); P.px(6, 4, c); P.px(9, 3, c); }));
+  A.table = () => memo('table', () => sprite(32, 24, (P) => { P.rect(2, 8, 28, 4, '#8a6238'); P.rect(2, 12, 28, 1, '#6a4a2a'); P.rect(4, 12, 3, 12, '#6a4a2a'); P.rect(25, 12, 3, 12, '#6a4a2a'); P.rect(8, 2, 6, 6, '#c8c8c8'); P.rect(9, 0, 4, 2, '#a8a8a8'); P.px(14, 4, '#a8a8a8'); P.rect(20, 4, 5, 4, '#e8c040'); P.px(22, 3, '#8a6a2a'); }));
+  A.chair = () => memo('chair', () => sprite(16, 22, (P) => { P.rect(2, 0, 12, 10, '#8a3a3a'); P.rect(3, 1, 10, 8, '#a84a4a'); P.rect(2, 10, 12, 5, '#8a6238'); P.rect(3, 15, 2, 7, '#6a4a2a'); P.rect(11, 15, 2, 7, '#6a4a2a'); }));
+  A.stove = () => memo('stove', () => sprite(20, 28, (P) => { P.rect(2, 8, 16, 20, '#3a3a3a'); P.rect(4, 12, 12, 8, '#1a1a1a'); P.rect(6, 14, 8, 4, '#ff8a30'); P.px(8, 15, '#ffd060'); P.rect(8, 0, 4, 8, '#4a4a4a'); }));
+  A.sandbox = () => memo('sandbox', () => sprite(4 * T, 2 * T, (P) => { P.rect(0, 0, 64, 32, '#a8784a'); P.rect(3, 3, 58, 26, '#e0cc90'); P.rect(20, 14, 8, 6, '#d84a2a'); P.px(40, 20, '#4a90d0'); P.px(12, 22, '#4a90d0'); }));
+  A.poolLadder = () => memo('poolladder', () => sprite(12, 20, (P) => { P.vline(2, 0, 20, '#d8e0e8'); P.vline(9, 0, 20, '#d8e0e8'); P.hline(3, 4, 6, '#d8e0e8'); P.hline(3, 10, 6, '#d8e0e8'); P.hline(3, 16, 6, '#d8e0e8'); }));
+  A.deckChair = () => memo('deckchair', () => sprite(20, 16, (P) => { P.rect(2, 4, 16, 8, '#f0e0b0'); P.rect(2, 4, 16, 2, '#e05a4a'); P.rect(2, 8, 16, 2, '#e05a4a'); P.rect(2, 12, 2, 4, '#8a6238'); P.rect(16, 12, 2, 4, '#8a6238'); }));
+
+  // ---- player & tools ---------------------------------------------------------------------------------
+  A.PLAYER = { skin: '#e8b898', hair: '#4a2a1a', shirt: '#c8843a', pants: '#3a4a6a', hat: '#8a3a2a' };
+  A.human = (cfg, dir, frame) => memo('hum' + dir + frame, () => sprite(16, 20, (P) => {
+    const { skin, hair, shirt, pants, hat } = cfg; const shirtD = Col.shade(shirt, 0.8), skinD = Col.shade(skin, 0.85);
+    const bob = frame === 1 ? -1 : 0, lA = frame === 1 ? -1 : frame === 2 ? 1 : 0;
+    P.rect(5, 14 + bob + lA, 3, 4, pants); P.rect(8, 14 + bob - lA, 3, 4, pants); P.rect(5, 18 + bob, 6, 1, '#3a2a20');
+    P.rect(4, 9 + bob, 8, 5, shirt); P.rect(4, 13 + bob, 8, 1, shirtD); P.rect(6, 9 + bob, 1, 5, Col.shade(shirt, 0.7)); P.rect(9, 9 + bob, 1, 5, Col.shade(shirt, 0.7));
+    const swing = frame === 1 ? 1 : frame === 2 ? -1 : 0; P.rect(3, 9 + bob + swing, 1, 4, shirt); P.rect(12, 9 + bob - swing, 1, 4, shirt); P.px(3, 13 + bob + swing, skin); P.px(12, 13 + bob - swing, skin);
+    P.rect(4, 2 + bob, 8, 7, skin); P.rect(4, 8 + bob, 8, 1, skinD);
+    P.rect(4, 1 + bob, 8, 2, hair); P.rect(3, 2 + bob, 1, 4, hair); P.rect(12, 2 + bob, 1, 4, hair);
+    if (dir === 3) P.rect(4, 3 + bob, 8, 5, hair);
+    if (dir === 0) { P.px(6, 5 + bob, '#222'); P.px(9, 5 + bob, '#222'); }
+    if (dir === 1) { P.px(5, 5 + bob, '#222'); P.rect(11, 2 + bob, 2, 5, hair); }
+    if (dir === 2) { P.px(10, 5 + bob, '#222'); P.rect(3, 2 + bob, 2, 5, hair); }
+    if (hat) { P.rect(2, 2 + bob, 12, 1, Col.shade(hat, 0.8)); P.rect(4, 0 + bob, 8, 2, hat); }
+  }));
+  // tool sprites drawn relative to the player, per facing dir
+  A.rakeTool = (dir) => memo('rake' + dir, () => sprite(24, 24, (P) => { const h = '#a8784a', m = '#8a8a90'; if (dir === 0) { P.rect(11, 2, 2, 14, h); P.rect(6, 16, 12, 3, m); for (let x = 6; x < 18; x += 2) P.px(x, 19, m); } else if (dir === 3) { P.rect(11, 8, 2, 14, h); P.rect(6, 4, 12, 3, m); for (let x = 6; x < 18; x += 2) P.px(x, 3, m); } else if (dir === 2) { P.rect(2, 11, 14, 2, h); P.rect(16, 6, 3, 12, m); for (let y = 6; y < 18; y += 2) P.px(19, y, m); } else { P.rect(8, 11, 14, 2, h); P.rect(5, 6, 3, 12, m); for (let y = 6; y < 18; y += 2) P.px(4, y, m); } }));
+  A.blowerTool = (dir) => memo('blower' + dir, () => sprite(24, 24, (P) => { const b = '#e05a2a', bd = '#a83a1a', tube = '#3a3a3a'; if (dir === 0) { P.rect(8, 6, 8, 8, b); P.rect(8, 6, 8, 2, bd); P.rect(11, 14, 3, 8, tube); P.rect(10, 21, 5, 2, '#5a5a5a'); } else if (dir === 3) { P.rect(8, 10, 8, 8, b); P.rect(8, 10, 8, 2, bd); P.rect(11, 2, 3, 8, tube); P.rect(10, 1, 5, 2, '#5a5a5a'); } else if (dir === 2) { P.rect(4, 8, 8, 8, b); P.rect(4, 8, 8, 2, bd); P.rect(12, 11, 10, 3, tube); P.rect(21, 10, 2, 5, '#5a5a5a'); } else { P.rect(12, 8, 8, 8, b); P.rect(12, 8, 8, 2, bd); P.rect(2, 11, 10, 3, tube); P.rect(1, 10, 2, 5, '#5a5a5a'); } }));
+
+  // ---- icons -------------------------------------------------------------------------------------------
+  const icons = {
+    coin: (P) => { P.disc(8, 8, 5.5, '#e0a020'); P.disc(8, 8, 4, '#f8d050'); P.rect(7, 5, 2, 6, '#e0a020'); },
+    leaf: (P) => { P.ellipse(8, 8, 5, 4, '#d8502a'); P.line(3, 12, 13, 4, '#a83820'); P.px(12, 3, '#4a8a3a'); P.px(4, 12, '#a83820'); },
+    hand: (P) => { P.rect(5, 4, 7, 9, '#e8b898'); P.rect(4, 6, 1, 5, '#e8b898'); P.rect(12, 6, 1, 5, '#e8b898'); for (let i = 0; i < 4; i++) P.vline(5 + i * 2, 2 + (i === 1 || i === 2 ? 0 : 1), 3, '#e8b898'); P.rect(5, 12, 7, 2, '#c8843a'); },
+    rake: (P) => { P.line(3, 13, 11, 3, '#a8784a'); P.rect(9, 1, 6, 3, '#8a8a90'); for (let x = 9; x < 15; x += 2) P.px(x, 4, '#8a8a90'); },
+    blower: (P) => { P.rect(3, 5, 7, 7, '#e05a2a'); P.rect(3, 5, 7, 2, '#a83a1a'); P.rect(10, 7, 5, 3, '#3a3a3a'); P.px(15, 6, '#a0d0f0'); P.px(15, 10, '#a0d0f0'); },
+    bag: (P) => { P.rect(3, 6, 10, 8, '#6a5a4a'); P.rect(3, 6, 10, 2, '#4a3a2a'); P.rect(6, 3, 4, 3, '#4a3a2a'); P.px(7, 9, '#d8502a'); P.px(9, 10, '#e08a30'); },
+    shoes: (P) => { P.rect(2, 8, 12, 5, '#e05a4a'); P.rect(2, 12, 12, 2, '#f0f0f0'); P.rect(8, 5, 6, 4, '#e05a4a'); P.px(4, 10, '#fff'); P.px(6, 10, '#fff'); },
+    gloves: (P) => { P.rect(4, 5, 8, 8, '#d8b040'); P.rect(3, 7, 1, 4, '#d8b040'); P.rect(12, 7, 1, 4, '#d8b040'); for (let i = 0; i < 4; i++) P.vline(4 + i * 2, 3, 3, '#d8b040'); P.rect(4, 12, 8, 2, '#a88020'); },
+    vent: (P) => { P.rect(2, 2, 12, 12, '#4a4a4a'); for (let y = 4; y < 13; y += 3) P.hline(4, y, 8, '#8a8a8a'); },
+    bin: (P) => { P.rect(4, 5, 8, 9, '#4a6a4a'); P.rect(3, 3, 10, 2, '#5a7a5a'); P.vline(6, 7, 6, '#3a5a3a'); P.vline(9, 7, 6, '#3a5a3a'); },
+    gate: (P) => { P.rect(2, 2, 2, 12, '#8a6a3a'); P.rect(12, 2, 2, 12, '#8a6a3a'); P.rect(4, 5, 8, 2, '#c8a068'); P.rect(4, 10, 8, 2, '#c8a068'); P.rect(7, 4, 2, 8, '#3a3a3a'); },
+    settings: (P) => { P.disc(8, 8, 5, '#e8e8e8'); P.disc(8, 8, 2, '#4a4a4a'); for (const [x, y] of [[8, 1], [8, 14], [1, 8], [14, 8], [3, 3], [12, 3], [3, 12], [12, 12]]) P.rect(x - 1, y - 1, 3, 3, '#e8e8e8'); },
+    check: (P) => { P.line(3, 8, 6, 11, '#6ad06a'); P.line(6, 11, 13, 4, '#6ad06a'); P.line(3, 9, 6, 12, '#6ad06a'); P.line(6, 12, 13, 5, '#6ad06a'); },
+    x: (P) => { P.line(4, 4, 12, 12, '#e05a4a'); P.line(12, 4, 4, 12, '#e05a4a'); P.line(5, 4, 12, 11, '#e05a4a'); P.line(11, 4, 4, 11, '#e05a4a'); },
+    lock: (P) => { P.rect(4, 7, 8, 7, '#8a8a90'); P.rect(5, 3, 1, 5, '#b0b0b8'); P.rect(10, 3, 1, 5, '#b0b0b8'); P.rect(5, 3, 6, 1, '#b0b0b8'); P.px(8, 10, '#3a3a3a'); },
+    star: (P) => { P.px(8, 3, '#fff'); P.px(8, 13, '#fff'); P.rect(6, 7, 5, 3, '#f8d050'); P.rect(7, 5, 3, 7, '#f8d050'); P.px(5, 8, '#f8d050'); P.px(11, 8, '#f8d050'); },
+    golden: (P) => { P.ellipse(8, 8, 5, 4, '#e8c040'); P.line(3, 12, 13, 4, '#a88020'); P.px(12, 3, '#4a8a3a'); P.px(6, 6, '#fff0a0'); },
+    wind: (P) => { P.line(2, 5, 10, 5, '#d0e0f0'); P.px(11, 4, '#d0e0f0'); P.line(3, 9, 13, 9, '#d0e0f0'); P.px(14, 8, '#d0e0f0'); P.line(4, 13, 9, 13, '#d0e0f0'); P.px(10, 12, '#d0e0f0'); },
+    house: (P) => { P.rect(3, 8, 10, 7, '#f0e4c8'); for (let y = 0; y < 5; y++) P.hline(2 + (4 - y), 3 + y, 12 - (4 - y) * 2, '#8a4a3a'); P.rect(7, 11, 3, 4, '#6a4a2a'); },
+    lang: (P) => { P.rect(2, 3, 12, 9, '#f4f4f4'); P.rect(2, 3, 12, 1, '#c8c8c8'); P.rect(4, 5, 3, 1, '#4a4a4a'); P.rect(4, 7, 8, 1, '#4a4a4a'); P.rect(4, 9, 6, 1, '#4a4a4a'); },
+    trophy: (P) => { P.rect(5, 2, 6, 6, '#f8d050'); P.rect(4, 2, 8, 1, '#e0a020'); P.rect(7, 8, 2, 3, '#e0a020'); P.rect(5, 11, 6, 2, '#e0a020'); },
+  };
+  A.icon = (name) => memo('icon:' + name, () => sprite(16, 16, (P) => { const f = icons[name]; if (f) f(P); else P.rect(3, 3, 10, 10, '#f0f'); }));
+})();
+
+</script>
+<script>
+/* Hojarasca — 20_audio.js  WebAudio: warm acoustic loop, wind/crows ambience, blower & rake loops, effects. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const A = (H.audio = {});
+  let ctx = null, master, musicBus, sfxBus, ambBus, noiseBuf, delay, delayGain, blowGain, blowFilter, rakeGain, ventGain, windGain;
+  let musicOn = true, soundOn = true, unlocked = false;
+  A.env = { blower: 0, blowerPower: 1, rake: 0, vent: 0, night: 0 };
+  A.ready = () => unlocked;
+  function makeNoise() { const len = ctx.sampleRate * 2, b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; return b; }
+  A.init = function () {
+    if (unlocked) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    ctx = new AC(); unlocked = true; noiseBuf = makeNoise();
+    master = ctx.createGain(); master.gain.value = 0.9; const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4; master.connect(comp); comp.connect(ctx.destination);
+    musicBus = ctx.createGain(); musicBus.gain.value = musicOn ? 0.45 : 0; const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4000; musicBus.connect(lp); lp.connect(master);
+    delay = ctx.createDelay(1); delay.delayTime.value = (60 / BPM) * 0.75; delayGain = ctx.createGain(); delayGain.gain.value = 0.25; const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = 1800; delay.connect(dlp); dlp.connect(delayGain); delayGain.connect(delay); delayGain.connect(musicBus);
+    sfxBus = ctx.createGain(); sfxBus.gain.value = soundOn ? 0.85 : 0; sfxBus.connect(master);
+    ambBus = ctx.createGain(); ambBus.gain.value = soundOn ? 0.7 : 0; ambBus.connect(master);
+    const loopNoise = (filterType, f, q, gain, bus) => { const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; const fl = ctx.createBiquadFilter(); fl.type = filterType; fl.frequency.value = f; fl.Q.value = q; const g = ctx.createGain(); g.gain.value = 0; s.connect(fl); fl.connect(g); g.connect(bus); s.start(); return [g, fl]; };
+    [windGain] = loopNoise('lowpass', 380, 0.5, 0, ambBus); windGain.gain.value = 0.045;
+    const wlfo = ctx.createOscillator(); wlfo.frequency.value = 0.09; const wlg = ctx.createGain(); wlg.gain.value = 0.03; wlfo.connect(wlg); wlg.connect(windGain.gain); wlfo.start();
+    [blowGain, blowFilter] = loopNoise('bandpass', 500, 1.2, 0, sfxBus);
+    const blowLp = ctx.createBiquadFilter(); // second stage handled inside loopNoise chain is enough
+    [rakeGain] = loopNoise('highpass', 2200, 0.7, 0, sfxBus);
+    [ventGain] = loopNoise('lowpass', 240, 2, 0, sfxBus);
+    const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, 22050); s.connect(ctx.destination); s.start();
+    if (ctx.state === 'suspended') ctx.resume();
+    nextNoteTime = ctx.currentTime + 0.1; setInterval(scheduler, 40);
+  };
+  A.setMusic = (on) => { musicOn = on; if (musicBus) musicBus.gain.setTargetAtTime(on ? 0.45 : 0, ctx.currentTime, 0.3); };
+  A.setSound = (on) => { soundOn = on; if (sfxBus) { sfxBus.gain.setTargetAtTime(on ? 0.85 : 0, ctx.currentTime, 0.1); ambBus.gain.setTargetAtTime(on ? 0.7 : 0, ctx.currentTime, 0.3); } };
+  A.suspend = () => { if (ctx && ctx.state === 'running') ctx.suspend(); };
+  A.resume = () => { if (ctx && ctx.state === 'suspended') ctx.resume(); };
+  let crowT = 6, dogT = 40;
+  A.update = function (dt) {
+    if (!unlocked) return; const t = ctx.currentTime, e = A.env;
+    blowGain.gain.setTargetAtTime(e.blower * 0.35, t, 0.06); blowFilter.frequency.setTargetAtTime(420 + e.blowerPower * 260, t, 0.1);
+    rakeGain.gain.setTargetAtTime(e.rake * 0.12, t, 0.05);
+    ventGain.gain.setTargetAtTime(e.vent * 0.08, t, 0.2);
+    crowT -= dt; if (crowT <= 0) { crowT = 8 + Math.random() * 16; if (soundOn && e.night < 0.6) crow(); }
+    dogT -= dt; if (dogT <= 0) { dogT = 60 + Math.random() * 90; if (soundOn) dog(); }
+  };
+  function crow() { const t = ctx.currentTime, n = 1 + (Math.random() * 2 | 0); for (let i = 0; i < n; i++) { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sawtooth'; const st = t + i * 0.32; o.frequency.setValueAtTime(320, st); o.frequency.exponentialRampToValueAtTime(220, st + 0.18); const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 3; g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.05, st + 0.02); g.gain.exponentialRampToValueAtTime(0.0005, st + 0.22); o.connect(f); f.connect(g); g.connect(ambBus); o.start(st); o.stop(st + 0.25); } }
+  function dog() { const t = ctx.currentTime; for (let i = 0; i < 2; i++) { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'square'; const st = t + i * 0.28; o.frequency.setValueAtTime(180, st); o.frequency.exponentialRampToValueAtTime(120, st + 0.12); const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 600; g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.02, st + 0.01); g.gain.exponentialRampToValueAtTime(0.0005, st + 0.15); o.connect(f); f.connect(g); g.connect(ambBus); o.start(st); o.stop(st + 0.2); } }
+
+  // ---- music: Am7 Fmaj7 Cmaj7 G6 -----------------------------------------------------------------
+  const BPM = 80, SPB = 60 / BPM, A3 = 220;
+  const CH = [[0, 3, 7, 10], [-4, 0, 3, 7], [3, 7, 10, 14], [-2, 2, 5, 9], [0, 3, 7, 10], [-4, 0, 3, 7], [-9, -5, -2, 2], [-2, 2, 5, 9]];
+  const PENTA = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22];
+  const freq = (semi, oct) => A3 * Math.pow(2, semi / 12 + (oct || 0));
+  let nextNoteTime = 0, step = 0, mel = [], melSeed = 5;
+  function makeMel() { const r = H.rng(melSeed++ * 4241); mel = []; let n = 3; for (let i = 0; i < 32; i++) { if (r.chance(0.3)) { n = H.math.clamp(n + r.int(5) - 2, 0, PENTA.length - 1); mel.push(n); } else mel.push(-1); } }
+  makeMel();
+  function scheduler() { if (!ctx || !musicOn) { if (ctx) nextNoteTime = ctx.currentTime + 0.1; return; } while (nextNoteTime < ctx.currentTime + 0.25) { playStep(step, nextNoteTime); nextNoteTime += SPB / 4 + (step % 2 === 0 ? 0.05 * SPB : -0.05 * SPB); step = (step + 1) % 128; if (step === 0 && Math.random() < 0.6) makeMel(); } }
+  function playStep(s, t) {
+    const bar = Math.floor(s / 16), b16 = s % 16, ch = CH[bar % CH.length];
+    if (b16 === 0) chord(ch, t, 0.5); if (b16 === 10) chord(ch, t, 0.3);
+    if (b16 === 0 || b16 === 8) bass(freq(ch[0], -1), t);
+    if (b16 % 4 === 2) shaker(t, 0.05); if (b16 === 12) shaker(t, 0.08);
+    const n = mel[s % 32]; if (n >= 0 && bar >= 2) pluck(freq(PENTA[n], 1), t, 0.12, true);
+  }
+  function chord(notes, t, vel) { notes.forEach((n, i) => pluck(freq(n, 0), t + i * 0.03, vel * 0.16, false)); }
+  function pluck(f, t, vol, echo) { const o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'; o2.type = 'sine'; o.frequency.value = f; o2.frequency.value = f * 2; const g2 = ctx.createGain(); g2.gain.value = 0.2; const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(3200, t); lp.frequency.exponentialRampToValueAtTime(800, t + 0.5); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0008, t + 1.4); o.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); g.connect(musicBus); if (echo) g.connect(delay); o.start(t); o2.start(t); o.stop(t + 1.5); o2.stop(t + 1.5); }
+  function bass(f, t) { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = f; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.26, t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t + 1.0); o.connect(g); g.connect(musicBus); o.start(t); o.stop(t + 1.1); }
+  function shaker(t, vel) { const s = ctx.createBufferSource(); s.buffer = noiseBuf; const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 6500; const g = ctx.createGain(); g.gain.setValueAtTime(vel, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.07); s.connect(hp); hp.connect(g); g.connect(musicBus); s.start(t, Math.random()); s.stop(t + 0.08); }
+
+  // ---- sfx ------------------------------------------------------------------------------------------
+  function tone(type, f0, f1, dur, vol, t0) { const t = t0 || ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain(); o.type = type; o.frequency.setValueAtTime(f0, t); if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); o.connect(g); g.connect(sfxBus); o.start(t); o.stop(t + dur + 0.02); }
+  function noise(dur, vol, filt, f0, f1, t0) { const t = t0 || ctx.currentTime, s = ctx.createBufferSource(); s.buffer = noiseBuf; const fl = ctx.createBiquadFilter(); fl.type = filt; fl.frequency.setValueAtTime(f0, t); if (f1) fl.frequency.exponentialRampToValueAtTime(f1, t + dur); const g = ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); s.connect(fl); fl.connect(g); g.connect(sfxBus); s.start(t, Math.random()); s.stop(t + dur + 0.02); }
+  let rustleT = 0;
+  const SFX = {
+    rustle: () => { const n = ctx.currentTime; if (n - rustleT < 0.05) return; rustleT = n; noise(0.07, 0.08, 'highpass', 3000 + Math.random() * 2000); },
+    dump: () => { const t = ctx.currentTime; noise(0.5, 0.2, 'lowpass', 2500, 500, t); for (let i = 0; i < 6; i++) tone('sine', 900 + i * 150, 0, 0.1, 0.06, t + 0.1 + i * 0.05); },
+    coin: () => { const t = ctx.currentTime; tone('sine', 1100, 0, 0.08, 0.1, t); tone('sine', 1500, 0, 0.16, 0.1, t + 0.07); },
+    buy: () => { const t = ctx.currentTime;[523, 659, 784].forEach((f, i) => tone('triangle', f, 0, 0.18, 0.09, t + i * 0.06)); },
+    gate: () => { const t = ctx.currentTime; tone('sawtooth', 220, 140, 0.5, 0.05, t); noise(0.4, 0.15, 'bandpass', 700, 300, t); tone('sine', 90, 60, 0.2, 0.15, t + 0.45); },
+    zone: () => { const t = ctx.currentTime;[523, 659, 784, 1046, 1318].forEach((f, i) => tone('triangle', f, 0, 0.5, 0.09, t + i * 0.09)); },
+    ending: () => { const t = ctx.currentTime;[262, 330, 392, 523, 659, 784, 1046].forEach((f, i) => tone('sine', f, 0, 1.6, 0.08, t + i * 0.12)); },
+    tap: () => tone('square', 700, 900, 0.04, 0.04), back: () => tone('sine', 700, 400, 0.08, 0.05), error: () => tone('sawtooth', 160, 120, 0.15, 0.06),
+    full: () => { tone('square', 300, 250, 0.1, 0.05); tone('square', 250, 200, 0.12, 0.05, ctx.currentTime + 0.12); },
+    hatch: () => { noise(0.6, 0.2, 'lowpass', 900, 200); tone('sine', 80, 50, 0.4, 0.2); },
+    gust: () => noise(1.6, 0.12, 'lowpass', 600, 250),
+    step: () => noise(0.05, 0.03, 'lowpass', 900),
+    ventIn: () => tone('sine', 500, 900, 0.08, 0.03),
+  };
+  A.sfx = (n) => { if (!unlocked || !soundOn) return; const f = SFX[n]; if (f) f(); };
+})();
+
+</script>
+<script>
+/* Hojarasca — 30_world.js  The property: ground, zones, buildings, fences, gates, vents, bins, trees, collision. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const T = H.TILE, MW = H.MAP_W, MH = H.MAP_H, A = H.art;
+  const W = (H.world = {});
+  const G = (H.G = { GRASS: 0, PATH: 1, CONCRETE: 2, WATER: 3, DECK: 4, GLASS: 5, STONE: 6, SOIL: 7, SAND: 8, ROAD: 9, PORCH: 10, SIDEWALK: 11, VOID: 12, RUG: 13 });
+  W.idx = (x, y) => y * MW + x; W.inMap = (x, y) => x >= 0 && y >= 0 && x < MW && y < MH;
+  W.ground = new Uint8Array(MW * MH); W.gvar = new Uint8Array(MW * MH); W.solid = new Uint8Array(MW * MH); W.zoneMap = new Int8Array(MW * MH).fill(-1);
+  W.objects = []; W.trees = []; W.lights = [];
+  // zones: index order matters (progress arrays)
+  W.ZONES = [
+    { id: 'front', rects: [[2, 28, 40, 42]], leaves: 1100, types: [0, 0, 1, 1, 2, 3], value: 1, bonus: 'front' },
+    { id: 'drive', rects: [[42, 28, 61, 42], [39, 15, 61, 26]], leaves: 650, types: [1, 2, 2, 3, 3], value: 2, bonus: 'drive' },
+    { id: 'back', rects: [[19, 2, 40, 13], [2, 2, 3, 13], [2, 12, 18, 13], [2, 15, 20, 26]], leaves: 2000, types: [0, 1, 1, 2, 3, 3], value: 3, bonus: 'back' },
+    { id: 'pool', rects: [[42, 2, 61, 13]], leaves: 1000, types: [0, 1, 2, 2, 3], value: 4, bonus: 'pool' },
+    { id: 'green', rects: [[5, 4, 16, 10]], leaves: 650, types: [2, 2, 3, 1], value: 6, bonus: 'green' },
+    { id: 'cellar', rects: [[3, 51, 14, 56]], leaves: 200, types: [4], value: 20, bonus: 'cellar' },
+  ];
+  W.GATES = [
+    { id: 'drive', tx: 41, ty: 35, orient: 'v', zone: 'drive', cost: 200 },
+    { id: 'back', tx: 10, ty: 27, orient: 'h', zone: 'back', cost: 600 },
+    { id: 'pool', tx: 50, ty: 14, orient: 'h', zone: 'pool', cost: 1400 },
+    { id: 'green', tx: 10, ty: 11, orient: 'h', zone: 'green', cost: 2400 },
+    { id: 'cellar', tx: 36, ty: 28, orient: 'hatch', zone: 'cellar', cost: 4000 },
+  ];
+  W.VENTS = [
+    { id: 'v_front1', zone: 'front', tx: 10, ty: 31, cost: 80 }, { id: 'v_front2', zone: 'front', tx: 30, ty: 41, cost: 80 },
+    { id: 'v_drive1', zone: 'drive', tx: 50, ty: 20, cost: 150 }, { id: 'v_drive2', zone: 'drive', tx: 56, ty: 38, cost: 150 },
+    { id: 'v_back1', zone: 'back', tx: 26, ty: 4, cost: 250 }, { id: 'v_back2', zone: 'back', tx: 8, ty: 20, cost: 250 }, { id: 'v_back3', zone: 'back', tx: 37, ty: 12, cost: 250 },
+    { id: 'v_pool1', zone: 'pool', tx: 44, ty: 11, cost: 400 }, { id: 'v_pool2', zone: 'pool', tx: 59, ty: 11, cost: 400 },
+    { id: 'v_green1', zone: 'green', tx: 8, ty: 6, cost: 500 }, { id: 'v_green2', zone: 'green', tx: 14, ty: 8, cost: 500 },
+    { id: 'v_cellar', zone: 'cellar', tx: 8, ty: 53, cost: 600 },
+  ];
+  W.BINS = [
+    { id: 'b_front', tx: 24, ty: 28, cost: 0, zone: 'front' },
+    { id: 'b_back', tx: 20, ty: 6, cost: 300, zone: 'back' },
+    { id: 'b_pool', tx: 43, ty: 12, cost: 600, zone: 'pool' },
+  ];
+  W.HATCH = { tx: 36, ty: 28 }; W.CELLAR_IN = { tx: 12, ty: 53 }; W.LADDER = { tx: 13, ty: 52 }; W.HATCH_OUT = { tx: 36, ty: 29 };
+  W.zoneIdx = (id) => W.ZONES.findIndex((z) => z.id === id);
+  W.zoneAt = (tx, ty) => (W.inMap(tx, ty) ? W.zoneMap[W.idx(tx, ty)] : -1);
+
+  function setG(x, y, g) { if (W.inMap(x, y)) W.ground[W.idx(x, y)] = g; }
+  function fillG(x0, y0, x1, y1, g) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) setG(x, y, g); }
+  function markSolid(x0, y0, x1, y1) { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (W.inMap(x, y)) W.solid[W.idx(x, y)] = 1; }
+  function addObj(o) { if (o.px === undefined) o.px = o.tx * T; if (o.py === undefined) o.py = o.ty * T; if (o.baseY === undefined) o.baseY = (o.ty + (o.h || 1)) * T; if (o.solid) markSolid(o.tx + (o.sx || 0), o.ty + (o.sy || 0), o.tx + (o.sx || 0) + o.sw - 1, o.ty + (o.sy || 0) + o.sh - 1); W.objects.push(o); return o; }
+  W.addObj = addObj;
+  const fence = (x, y, k) => addObj({ kind: 'fence', fk: k, tx: x, ty: y, w: 1, h: 1, solid: true, sw: 1, sh: 1 });
+  const tree = (x, y, kind) => { const o = addObj({ kind: 'tree', tkind: kind, seed: x * 31 + y, tx: x, ty: y, w: 1, h: 1, px: x * T - 12, py: y * T - 34, baseY: (y + 1) * T, solid: true, sw: 1, sh: 1 }); W.trees.push(o); return o; };
+
+  W.build = function () {
+    W.objects.length = 0; W.trees.length = 0; W.lights.length = 0; W.solid.fill(0); W.zoneMap.fill(-1);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) { const i = W.idx(x, y); W.ground[i] = y >= 44 ? G.VOID : G.GRASS; W.gvar[i] = (H.hash(x, y, 3) * 4) | 0; }
+    // street
+    fillG(0, 44, MW - 1, 44, G.SIDEWALK); fillG(0, 45, MW - 1, 48, G.ROAD); for (let x = 0; x < MW; x += 3) setG(x, 46, G.ROAD);
+    // house, porch, path, driveway
+    fillG(26, 27, 33, 27, G.PORCH); fillG(29, 28, 30, 42, G.PATH); fillG(42, 27, 48, 43, G.CONCRETE);
+    // pool deck & water
+    fillG(42, 2, 61, 13, G.DECK); fillG(46, 5, 56, 9, G.WATER);
+    // greenhouse floor + beds, sandbox
+    fillG(5, 4, 16, 10, G.GLASS); for (const y of [5, 7, 9]) fillG(6, y, 15, y, G.SOIL);
+    fillG(24, 12, 27, 13, G.SAND);
+    // cellar room
+    fillG(3, 51, 14, 56, G.STONE); fillG(6, 54, 9, 55, G.RUG);
+    // zone map
+    W.ZONES.forEach((z, zi) => { for (const [x0, y0, x1, y1] of z.rects) for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (W.inMap(x, y)) W.zoneMap[W.idx(x, y)] = zi; });
+    // perimeter fence + inner fences
+    for (let x = 1; x <= 62; x++) { fence(x, 1, 'h'); fence(x, 43, 'h'); }
+    for (let y = 2; y <= 42; y++) { fence(1, y, 'v'); fence(62, y, 'v'); }
+    for (let y = 28; y <= 42; y++) if (y !== 35) fence(41, y, 'v');          // front | drive
+    for (let x = 2; x <= 21; x++) if (x !== 10) fence(x, 27, 'h');            // front | west passage
+    for (let x = 39; x <= 61; x++) if (x !== 50) fence(x, 14, 'h');           // drive passage | pool
+    for (let y = 2; y <= 13; y++) fence(41, y, 'v');                          // back | pool (no gate)
+    // gates (solid until opened; solidity resolved in W.blocked)
+    for (const gt of W.GATES) if (gt.orient !== 'hatch') addObj({ kind: 'gate', gate: gt, tx: gt.tx, ty: gt.ty, w: 1, h: 1, py: gt.ty * T - 4 });
+    addObj({ kind: 'hatch', tx: W.HATCH.tx, ty: W.HATCH.ty, w: 1, h: 1, px: W.HATCH.tx * T - 2, py: W.HATCH.ty * T, baseY: W.HATCH.ty * T + 2 });
+    addObj({ kind: 'ladder', tx: W.LADDER.tx, ty: W.LADDER.ty, w: 1, h: 1, px: W.LADDER.tx * T + 2, py: W.LADDER.ty * T - 8, baseY: W.LADDER.ty * T + 2 });
+    // house 16x12 footprint at (22,15); sprite 16x15 drawn from y=12
+    addObj({ kind: 'house', tx: 22, ty: 15, w: 16, h: 12, px: 22 * T, py: 12 * T, baseY: 27 * T, solid: true, sw: 16, sh: 12 });
+    W.lights.push({ x: 22 * T + 142, y: 12 * T + 210, r: 40, color: '#ffd080' }, { x: 22 * T + 28, y: 12 * T + 80, r: 28, color: '#ffd080' }, { x: 22 * T + 108, y: 12 * T + 80, r: 28, color: '#ffd080' });
+    // greenhouse building at (4,3) 14x9 ; walls solid except door (10,11)
+    addObj({ kind: 'greenhouse', tx: 4, ty: 3, w: 14, h: 9, px: 4 * T, py: 3 * T - 8, baseY: 12 * T, solid: false });
+    for (let x = 4; x <= 17; x++) { W.solid[W.idx(x, 3)] = 1; if (x !== 10) W.solid[W.idx(x, 11)] = 1; }
+    for (let y = 3; y <= 11; y++) { W.solid[W.idx(4, y)] = 1; W.solid[W.idx(17, y)] = 1; }
+    for (const y of [5, 7, 9]) markSolid(6, y, 15, y);
+    W.lights.push({ x: 10 * T + 8, y: 7 * T, r: 60, color: '#c0ffe0' });
+    // shed, car, sandbox, pool props
+    addObj({ kind: 'shed', tx: 33, ty: 8, w: 4, h: 4, py: 8 * T - 16, solid: true, sy: 1, sw: 4, sh: 3 });
+    addObj({ kind: 'car', tx: 43, ty: 34, w: 4, h: 4, py: 34 * T - 8, solid: true, sw: 4, sh: 4 });
+    addObj({ kind: 'sandbox', tx: 24, ty: 12, w: 4, h: 2, baseY: 12 * T + 1 });
+    addObj({ kind: 'poolladder', tx: 46, ty: 4, w: 1, h: 1, py: 4 * T + 6 });
+    addObj({ kind: 'deckchair', tx: 58, ty: 5, w: 1, h: 1, solid: true, sw: 1, sh: 1 }); addObj({ kind: 'deckchair', tx: 58, ty: 7, w: 1, h: 1, solid: true, sw: 1, sh: 1 });
+    for (let y = 5; y <= 9; y++) for (let x = 46; x <= 56; x++) W.solid[W.idx(x, y)] = 2; // 2 = water: blocks player, not leaves
+    // cellar walls
+    for (let x = 2; x <= 15; x++) { W.solid[W.idx(x, 50)] = 1; W.solid[W.idx(x, 57)] = 1; } for (let y = 50; y <= 57; y++) { W.solid[W.idx(2, y)] = 1; W.solid[W.idx(15, y)] = 1; }
+    addObj({ kind: 'table', tx: 6, ty: 52, w: 2, h: 1, py: 52 * T - 8, solid: true, sw: 2, sh: 1 }); addObj({ kind: 'chair', tx: 9, ty: 52, w: 1, h: 1, py: 52 * T - 6, solid: true, sw: 1, sh: 1 }); addObj({ kind: 'stove', tx: 4, ty: 52, w: 1, h: 1, py: 52 * T - 12, solid: true, sw: 1, sh: 1 });
+    W.lights.push({ x: 4 * T + 10, y: 52 * T + 8, r: 44, color: '#ff9a40' }, { x: 7 * T, y: 52 * T, r: 30, color: '#ffe0a0' });
+    // trees & hedges
+    for (const [x, y, k] of [[8, 33, 'maple'], [17, 39, 'maple'], [35, 38, 'oak'], [57, 31, 'birch'], [30, 7, 'oak'], [22, 11, 'birch'], [38, 4, 'maple'], [4, 20, 'birch'], [12, 22, 'maple'], [60, 3, 'pine'], [43, 3, 'pine'], [30, 3, 'birch'], [5, 40, 'oak'], [52, 24, 'maple']]) tree(x, y, k);
+    for (let x = 3; x < 62; x += 4) tree(x + ((x * 7) % 3), 0, (x % 8 === 3) ? 'pine' : 'oak');
+    for (let y = 4; y < 42; y += 5) { tree(0, y, 'pine'); tree(63, y + 2, 'maple'); }
+    for (let y = 16; y <= 25; y++) addObj({ kind: 'hedge', tx: 61, ty: y, w: 1, h: 1, py: y * T - 4, solid: true, sw: 1, sh: 1 });
+    for (let x = 43; x <= 60; x += 3) addObj({ kind: 'bush', seed: x, tx: x, ty: 27, w: 1, h: 1, solid: true, sw: 1, sh: 1 });
+    addObj({ kind: 'mailbox', tx: 32, ty: 41, w: 1, h: 1, py: 41 * T - 8, solid: true, sw: 1, sh: 1 });
+    addObj({ kind: 'pot', seed: 3, tx: 25, ty: 27, w: 1, h: 1 }); addObj({ kind: 'pot', seed: 8, tx: 34, ty: 27, w: 1, h: 1 });
+    for (const [x, y] of [[20, 40], [40, 20], [45, 26], [22, 26]]) { addObj({ kind: 'lantern', tx: x, ty: y, w: 1, h: 1, py: y * T - 8, solid: true, sw: 1, sh: 1 }); W.lights.push({ x: x * T + 8, y: y * T + 4, r: 34, color: '#ffcc66' }); }
+    // bins & vents
+    for (const b of W.BINS) addObj({ kind: 'bin', bin: b, tx: b.tx, ty: b.ty, w: 1, h: 1, px: b.tx * T - 1, py: b.ty * T - 8, solid: true, sw: 1, sh: 1 });
+    for (const v of W.VENTS) addObj({ kind: 'vent', vent: v, tx: v.tx, ty: v.ty, w: 1, h: 1, baseY: v.ty * T + 1 });
+  };
+
+  // ---- collision ------------------------------------------------------------------------------------
+  W.gateOpen = (id) => !!(H.state && H.state.gates[id]);
+  W.gateAt = (tx, ty) => W.GATES.find((g) => g.tx === tx && g.ty === ty && g.orient !== 'hatch');
+  W.blocked = function (tx, ty) { if (!W.inMap(tx, ty)) return true; const s = W.solid[W.idx(tx, ty)]; if (s) return true; const g = W.gateAt(tx, ty); return !!(g && !W.gateOpen(g.id)); };
+  W.leafBlocked = function (tx, ty) { if (!W.inMap(tx, ty)) return true; const s = W.solid[W.idx(tx, ty)]; if (s === 1) return true; const g = W.gateAt(tx, ty); return !!(g && !W.gateOpen(g.id)); };
+  W.isWater = (tx, ty) => W.inMap(tx, ty) && W.ground[W.idx(tx, ty)] === G.WATER;
+  W.leafSpawnable = (tx, ty) => W.inMap(tx, ty) && W.solid[W.idx(tx, ty)] !== 1 && !W.gateAt(tx, ty) && !W.BINS.some((b) => Math.abs(b.tx - tx) <= 1 && Math.abs(b.ty - ty) <= 1);
+})();
+
+</script>
+<script>
+/* Hojarasca — 40_leaves.js  Leaf particle simulation in flat typed arrays. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const T = H.TILE, W = H.world, A = H.art;
+  const LV = (H.leaves = {});
+  const MAX = 6400;
+  const X = new Float32Array(MAX), Y = new Float32Array(MAX), VX = new Float32Array(MAX), VY = new Float32Array(MAX), ROT = new Float32Array(MAX);
+  const TYPE = new Uint8Array(MAX), ZONE = new Int8Array(MAX), ALIVE = new Uint8Array(MAX), FLY = new Uint8Array(MAX);
+  LV.X = X; LV.Y = Y; LV.VX = VX; LV.VY = VY; LV.TYPE = TYPE; LV.ZONE = ZONE; LV.ALIVE = ALIVE;
+  LV.n = 0; LV.onCollect = null; LV.blownCount = 0;
+  LV.clear = () => { LV.n = 0; ALIVE.fill(0); };
+  LV.add = (x, y, type, zone) => { if (LV.n >= MAX) return -1; const i = LV.n++; X[i] = x; Y[i] = y; VX[i] = 0; VY[i] = 0; ROT[i] = Math.random() * 4; TYPE[i] = type; ZONE[i] = zone; ALIVE[i] = 1; FLY[i] = 0; return i; };
+  LV.spawnZone = function (zi, rng) {
+    const z = W.ZONES[zi]; let placed = 0, tries = 0;
+    const trees = W.trees.filter((t) => W.zoneAt(t.tx, t.ty + 1) === zi || W.zoneAt(t.tx - 2, t.ty + 2) === zi);
+    while (placed < z.leaves && tries++ < z.leaves * 30) {
+      let tx, ty;
+      if (trees.length && rng.chance(0.55)) { const t = rng.pick(trees); tx = Math.round(t.tx + rng.gauss() * 2.2); ty = Math.round(t.ty + 1 + Math.abs(rng.gauss()) * 1.8); }
+      else { const r = rng.pick(z.rects); tx = r[0] + rng.int(r[2] - r[0] + 1); ty = r[1] + rng.int(r[3] - r[1] + 1); }
+      if (W.zoneAt(tx, ty) !== zi || !W.leafSpawnable(tx, ty)) continue;
+      LV.add(tx * T + rng() * T, ty * T + rng() * T, rng.pick(z.types), zi); placed++;
+    }
+  };
+  LV.countAlive = function (zi) { let n = 0; for (let i = 0; i < LV.n; i++) if (ALIVE[i] && (zi === undefined || ZONE[i] === zi)) n++; return n; };
+  LV.collect = function (i, how) { if (!ALIVE[i]) return; ALIVE[i] = 0; if (LV.onCollect) LV.onCollect(i, how); };
+
+  // ctx: {px,py, tool, aim, active, mvx, mvy, blower:{power,range,cone}, rake:{w}, vents:[{x,y,r}], bins:[{x,y,r}], wind:{x,y}}
+  LV.update = function (dt, c) {
+    const fr = Math.pow(0.82, dt * 60), frW = Math.pow(0.95, dt * 60);
+    const blow = c.tool === 'blower' && c.active && c.blower.power > 0;
+    const rake = c.tool === 'rake' && c.active && c.rake.w > 0;
+    const cosA = Math.cos(c.aim), sinA = Math.sin(c.aim);
+    const range = c.blower.range, halfCone = c.blower.cone / 2, power = c.blower.power;
+    const rw = c.rake.w * T, rd = T * 1.3;
+    const moving = Math.hypot(c.mvx, c.mvy) > 2;
+    let raked = 0;
+    for (let i = 0; i < LV.n; i++) {
+      if (!ALIVE[i]) continue;
+      let vx = VX[i], vy = VY[i];
+      const dx = X[i] - c.px, dy = Y[i] - c.py;
+      if (blow) {
+        const d = Math.hypot(dx, dy);
+        if (d < range && d > 2) {
+          const ang = Math.atan2(dy, dx), diff = Math.abs(H.math.angDiff(ang, c.aim));
+          if (diff < halfCone) {
+            const f = power * (1 - d / range) * (1 - (diff / halfCone) * 0.6) * 900 * dt;
+            vx += cosA * f + (Math.random() - 0.5) * f * 0.5; vy += sinA * f + (Math.random() - 0.5) * f * 0.5;
+            ROT[i] += dt * 20; if (!FLY[i]) { FLY[i] = 1; LV.blownCount++; }
+          }
+        }
+      }
+      if (rake && moving) {
+        // leaves in the rectangle in front of the player (along aim) move with the player
+        const along = dx * cosA + dy * sinA, side = -dx * sinA + dy * cosA;
+        if (along > -2 && along < rd + 4 && Math.abs(side) < rw / 2 && raked < 400) { vx = c.mvx * 1.05 + (Math.random() - 0.5) * 6; vy = c.mvy * 1.05 + (Math.random() - 0.5) * 6; raked++; }
+      }
+      // vents
+      for (let k = 0; k < c.vents.length; k++) { const v = c.vents[k]; const ex = v.x - X[i], ey = v.y - Y[i]; const d = Math.hypot(ex, ey); if (d < v.r) { if (d < 5) { LV.collect(i, 'vent'); break; } const f = (1 - d / v.r) * 380 * dt + 40 * dt; vx += (ex / d) * f; vy += (ey / d) * f; ROT[i] += dt * 8; } }
+      if (!ALIVE[i]) continue;
+      // bins: leaves pushed into a bin are sold
+      for (let k = 0; k < c.bins.length; k++) { const b = c.bins[k]; if (Math.abs(X[i] - b.x) < b.r && Math.abs(Y[i] - b.y) < b.r && Math.hypot(vx, vy) > 8) { LV.collect(i, 'bin'); break; } }
+      if (!ALIVE[i]) continue;
+      // wind & water
+      const tx = (X[i] / T) | 0, ty = (Y[i] / T) | 0;
+      const water = W.isWater(tx, ty);
+      if (c.wind.x || c.wind.y) { vx += c.wind.x * dt * (water ? 2 : 1); vy += c.wind.y * dt * (water ? 2 : 1); }
+      if (water) { vx += Math.sin(H.time * 0.7 + i) * 3 * dt; vy += Math.cos(H.time * 0.5 + i * 0.3) * 3 * dt; }
+      vx *= water ? frW : fr; vy *= water ? frW : fr;
+      if (Math.abs(vx) < 0.05) vx = 0; if (Math.abs(vy) < 0.05) vy = 0;
+      if (vx || vy) {
+        let nx = X[i] + vx * dt, ny = Y[i] + vy * dt;
+        if (W.leafBlocked((nx / T) | 0, ty)) { nx = X[i]; vx = -vx * 0.2; }
+        if (W.leafBlocked(((nx / T) | 0), (ny / T) | 0)) { ny = Y[i]; vy = -vy * 0.2; }
+        X[i] = nx; Y[i] = ny;
+        if (ROT[i] > 4) ROT[i] -= 4;
+      } else FLY[i] = 0;
+      VX[i] = vx; VY[i] = vy;
+    }
+  };
+  // hand pickup: returns indices within radius, up to max
+  LV.near = function (px, py, r, max) { const out = []; const r2 = r * r; for (let i = 0; i < LV.n && out.length < max; i++) { if (!ALIVE[i]) continue; const dx = X[i] - px, dy = Y[i] - py; if (dx * dx + dy * dy < r2) out.push(i); } return out; };
+  LV.draw = function (g, ox, oy, vw, vh) {
+    const x0 = ox - 4, y0 = oy - 4, x1 = ox + vw + 4, y1 = oy + vh + 4;
+    for (let i = 0; i < LV.n; i++) {
+      if (!ALIVE[i]) continue; const x = X[i], y = Y[i]; if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      const fr = (ROT[i] | 0) & 3; const lift = FLY[i] && (Math.abs(VX[i]) + Math.abs(VY[i]) > 30) ? 2 : 0;
+      if (lift) { g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect((x - ox) | 0, (y - oy + 1) | 0, 3, 1); }
+      g.drawImage(A.leaf(TYPE[i], fr), (x - ox - 2) | 0, (y - oy - 2 - lift) | 0);
+    }
+  };
+  LV.serialize = function () { const out = []; for (let i = 0; i < LV.n; i++) if (ALIVE[i]) out.push(Math.round(X[i] * 2), Math.round(Y[i] * 2), TYPE[i] * 8 + (ZONE[i] & 7)); return out; };
+  LV.restore = function (arr) { LV.clear(); for (let k = 0; k + 2 < arr.length; k += 3) LV.add(arr[k] / 2, arr[k + 1] / 2, (arr[k + 2] / 8) | 0, arr[k + 2] & 7); };
+})();
+
+</script>
+<script>
+/* Hojarasca — 50_game.js  State, economy, upgrades, zones, gates, dumping, ending, save/load. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const T = H.TILE, W = H.world, LV = H.leaves;
+  const G = (H.game = {});
+  H.UPG = {
+    bag: { caps: [10, 25, 60, 150, 400, 1000], costs: [15, 50, 150, 400, 1000], icon: 'bag' },
+    rake: { w: [0, 1.5, 2.2, 3, 4], costs: [40, 120, 300, 700], icon: 'rake' },
+    blower: { power: [0, 1, 1.5, 2.2, 3.2, 4.5], range: [0, 3.5, 4.5, 5.5, 6.5, 8], cone: [0, 50, 55, 60, 70, 80], costs: [150, 400, 900, 1800, 3500], icon: 'blower' },
+    shoes: { speed: [70, 85, 100, 120], costs: [60, 200, 500], icon: 'shoes' },
+    gloves: { r: [12, 18, 26], rate: [5, 9, 15], costs: [50, 150], icon: 'gloves' },
+  };
+  G.newState = () => ({ version: 1, coins: 0, bag: 0, bagValue: 0, tool: 'hand', up: { bag: 0, rake: 0, blower: 0, shoes: 0, gloves: 0 }, vents: {}, gates: {}, bins: { b_front: true }, zones: {}, stats: { leaves: 0, coins: 0, time: 0, dumps: 0, blown: 0 }, flags: {}, player: { x: 30 * T, y: 31 * T }, inCellar: false, ending: false, seed: (Math.random() * 1e9) | 0 });
+  G.d = {};
+  G.derive = function () {
+    const S = H.state, u = S.up, U = H.UPG, d = G.d, z = S.zones;
+    d.bagCap = U.bag.caps[u.bag] * (z.green && z.green.done ? 2 : 1);
+    d.speed = U.shoes.speed[u.shoes] * (z.drive && z.drive.done ? 1.15 : 1);
+    d.handR = U.gloves.r[u.gloves]; d.handRate = U.gloves.rate[u.gloves];
+    d.rakeW = U.rake.w[u.rake];
+    d.blower = { power: U.blower.power[u.blower] * (z.back && z.back.done ? 1.3 : 1), range: U.blower.range[u.blower] * T, cone: (U.blower.cone[u.blower] * Math.PI) / 180 };
+    d.ventR = 2.6 * T * (z.pool && z.pool.done ? 1.5 : 1);
+    d.valueMult = z.front && z.front.done ? 1.25 : 1;
+    return d;
+  };
+  G.leafValue = (i) => W.ZONES[LV.ZONE[i]].value * G.d.valueMult;
+
+  // ---- leaf collection ----------------------------------------------------------------------------
+  G.pickup = function (i) { const S = H.state; if (S.bag >= G.d.bagCap) return false; LV.collect(i, 'hand'); return true; };
+  LV.onCollect = function (i, how) {
+    const S = H.state, v = G.leafValue(i);
+    S.stats.leaves += 1;
+    if (how === 'hand') { S.bag += 1; S.bagValue += v; }
+    else { S.coins += v; S.stats.coins += v; H.emit('sold', { i, v, how }); }
+    G.zoneCheck(LV.ZONE[i]);
+  };
+  G.dump = function () { const S = H.state; if (S.bag <= 0) return 0; const v = Math.round(S.bagValue); S.coins += v; S.stats.coins += v; S.stats.dumps += 1; S.bag = 0; S.bagValue = 0; H.emit('dump', v); return v; };
+
+  // ---- shop ------------------------------------------------------------------------------------------
+  G.nextCost = (id) => { const u = H.UPG[id], lv = H.state.up[id]; return lv < u.costs.length ? u.costs[lv] : null; };
+  G.buy = function (id) { const S = H.state, cost = G.nextCost(id); if (cost === null || S.coins < cost) return false; S.coins -= cost; S.up[id] += 1; G.derive(); if (id === 'rake' && S.up.rake === 1) S.tool = 'rake'; if (id === 'blower' && S.up.blower === 1) S.tool = 'blower'; H.emit('buy', id); return true; };
+  G.buyVent = function (id) { const S = H.state, v = W.VENTS.find((x) => x.id === id); if (!v || S.vents[id] || S.coins < v.cost) return false; S.coins -= v.cost; S.vents[id] = true; H.emit('buy', id); return true; };
+  G.buyBin = function (id) { const S = H.state, b = W.BINS.find((x) => x.id === id); if (!b || S.bins[id] || S.coins < b.cost) return false; S.coins -= b.cost; S.bins[id] = true; H.emit('buy', id); return true; };
+  G.zoneUnlocked = (zid) => zid === 'front' || !!H.state.gates[zid];
+  G.canOpenGate = function (id) { const S = H.state, g = W.GATES.find((x) => x.id === id); if (!g || S.gates[id]) return { ok: false }; if (id === 'cellar') { const all = W.ZONES.filter((z) => z.id !== 'cellar').every((z) => G.zoneProgress(z.id) >= 0.95); if (!all) return { ok: false, reason: 'cellar' }; } return { ok: S.coins >= g.cost, cost: g.cost }; };
+  G.openGate = function (id) { const S = H.state, g = W.GATES.find((x) => x.id === id); const c = G.canOpenGate(id); if (!c.ok) return false; S.coins -= g.cost; S.gates[id] = true; H.emit('gate', id); return true; };
+  G.activeVents = () => W.VENTS.filter((v) => H.state.vents[v.id]).map((v) => ({ x: v.tx * T + 8, y: v.ty * T + 8, r: G.d.ventR }));
+  G.activeBins = () => W.BINS.filter((b) => H.state.bins[b.id]).map((b) => ({ x: b.tx * T + 8, y: b.ty * T + 8, r: 13 }));
+
+  // ---- zones ------------------------------------------------------------------------------------------
+  G.zoneProgress = function (zid) { const z = H.state.zones[zid]; if (!z || !z.total) return 0; return 1 - LV.countAlive(W.zoneIdx(zid)) / z.total; };
+  G.totalProgress = function () { let tot = 0, left = 0; for (const z of W.ZONES) { const s = H.state.zones[z.id]; if (!s) continue; tot += s.total; left += LV.countAlive(W.zoneIdx(z.id)); } return tot ? 1 - left / tot : 0; };
+  G.zoneCheck = function (zi) { const z = W.ZONES[zi], s = H.state.zones[z.id]; if (!s || s.done) return; if (LV.countAlive(zi) === 0) { s.done = true; G.derive(); H.emit('zoneDone', z.id); if (z.id === 'cellar') { H.state.ending = true; H.emit('ending'); } } };
+  G.spawnAll = function () { LV.clear(); const rng = H.rng(H.state.seed); W.ZONES.forEach((z, zi) => { LV.spawnZone(zi, rng); H.state.zones[z.id] = { total: LV.countAlive(zi), done: false }; }); };
+
+  // ---- save -------------------------------------------------------------------------------------------
+  G.save = function () { try { const S = H.state; S.player = { x: H.main.player.x, y: H.main.player.y }; S.inCellar = H.main.player.cellar; localStorage.setItem(H.SAVE_KEY, JSON.stringify({ state: S, leaves: LV.serialize() })); return true; } catch (e) { return false; } };
+  G.hasSave = () => { try { return !!localStorage.getItem(H.SAVE_KEY); } catch (e) { return false; } };
+  G.load = function () { try { const raw = localStorage.getItem(H.SAVE_KEY); if (!raw) return null; const d = JSON.parse(raw); const s = Object.assign(G.newState(), d.state); s.up = Object.assign(G.newState().up, d.state.up || {}); s.stats = Object.assign(G.newState().stats, d.state.stats || {}); return { state: s, leaves: d.leaves }; } catch (e) { return null; } };
+  G.clear = () => { try { localStorage.removeItem(H.SAVE_KEY); } catch (e) { /* ignore */ } };
+  G.settings = { lang: 'en', music: true, sound: true };
+  G.loadSettings = function () { try { const raw = localStorage.getItem(H.SETTINGS_KEY); if (raw) Object.assign(G.settings, JSON.parse(raw)); else if (/^es/i.test(navigator.language || '')) G.settings.lang = 'es'; } catch (e) { /* ignore */ } H.setLang(G.settings.lang); };
+  G.saveSettings = () => { try { localStorage.setItem(H.SETTINGS_KEY, JSON.stringify(G.settings)); } catch (e) { /* ignore */ } };
+  G.start = function (loaded) { H.state = loaded ? loaded.state : G.newState(); if (loaded) LV.restore(loaded.leaves); else G.spawnAll(); G.derive(); };
+})();
+
+</script>
+<script>
+/* Hojarasca — 60_ui.js  Twin-stick touch input, HUD, tool tabs, shop, modals, toasts. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const { clamp } = H.math;
+  const A = H.art, W = H.world, G = H.game, LV = H.leaves;
+  const UI = (H.ui = {});
+  const FONT = 'ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif';
+  const PAL = { panel: '#f6ecd8', panelD: '#e6d6b8', ink: '#3a2a1e', soft: '#7a6a5a', accent: '#c85a2a', green: '#5a9a4a', hud: 'rgba(30,22,16,0.72)', hudInk: '#f6ecd8', dim: 'rgba(12,10,8,0.55)', coin: '#ffe08a' };
+  UI.PAL = PAL; UI.safe = { t: 0, r: 0, b: 0, l: 0 }; UI.modal = null; UI.toasts = []; UI.hintText = null;
+  UI.left = null; UI.right = null; UI.STICK_R = 46;
+  let hits = [], pressed = null, pressedT = 0, cssW = 0, cssH = 0;
+  function rr(g, x, y, w, h, r) { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+  function text(g, s, x, y, size, color, align, weight) { g.font = `${weight || 600} ${size}px ${FONT}`; g.fillStyle = color; g.textAlign = align || 'left'; g.textBaseline = 'middle'; g.fillText(s, x, y); }
+  function textW(g, s, size, weight) { g.font = `${weight || 600} ${size}px ${FONT}`; return g.measureText(s).width; }
+  function icon(g, name, x, y, size) { g.imageSmoothingEnabled = false; g.drawImage(A.icon(name), x, y, size, size); }
+  function wrap(g, s, maxW, size, weight) { g.font = `${weight || 500} ${size}px ${FONT}`; const out = []; for (const para of String(s).split('\n')) { let line = ''; for (const word of para.split(' ')) { const t = line ? line + ' ' + word : word; if (g.measureText(t).width > maxW && line) { out.push(line); line = word; } else line = t; } out.push(line); } return out; }
+  function hit(x, y, w, h, fn, id) { hits.push({ x, y, w, h, fn, id: id || fn }); }
+  UI.rr = rr; UI.text = text; UI.icon = icon; UI.hit = hit;
+  function btn(g, id, x, y, w, h, label, o) {
+    o = o || {}; const dis = !!o.disabled, isP = pressed === id && pressedT > 0;
+    const bg = dis ? '#c8bca8' : o.kind === 'secondary' ? PAL.panelD : o.kind === 'green' ? PAL.green : PAL.accent, fg = dis ? '#8a8078' : o.kind === 'secondary' ? PAL.ink : '#fff8ec';
+    g.save(); if (isP) g.translate(0, 1);
+    rr(g, x, y + 2, w, h, 12); g.fillStyle = 'rgba(0,0,0,0.2)'; g.fill(); rr(g, x, y, w, h, 12); g.fillStyle = bg; g.fill();
+    if (!dis) { rr(g, x + 1, y + 1, w - 2, h / 2, 10); g.fillStyle = 'rgba(255,255,255,0.14)'; g.fill(); }
+    let tx = x + w / 2; const lw = label ? textW(g, label, o.size || 15, 800) : 0;
+    if (o.icon) { const sz = Math.min(24, h - 12), total = sz + 6 + lw, ix = x + (w - total) / 2; icon(g, o.icon, ix, y + (h - sz) / 2, sz); tx = ix + sz + 6 + lw / 2; }
+    if (label) text(g, label, tx, y + h / 2, o.size || 15, fg, 'center', 800);
+    g.restore(); if (!dis) hit(x, y, w, h, o.fn, id);
+  }
+  UI.btn = btn;
+  function panel(g, r, title, onClose) { rr(g, r.x, r.y + 4, r.w, r.h, 18); g.fillStyle = 'rgba(0,0,0,0.35)'; g.fill(); rr(g, r.x, r.y, r.w, r.h, 18); g.fillStyle = PAL.panel; g.fill(); g.lineWidth = 3; g.strokeStyle = '#a06a3a'; rr(g, r.x, r.y, r.w, r.h, 18); g.stroke(); if (title) text(g, title, r.x + 20, r.y + 28, 22, PAL.ink, 'left', 800); if (onClose) { const bx = r.x + r.w - 46, by = r.y + 12; rr(g, bx, by, 34, 34, 10); g.fillStyle = PAL.panelD; g.fill(); icon(g, 'x', bx + 5, by + 5, 24); hit(bx - 6, by - 6, 46, 46, onClose, 'close'); } }
+  function modalRect(pw, ph) { const w = Math.min(pw, cssW - 24), h = Math.min(ph, cssH - UI.safe.t - UI.safe.b - 24); return { x: (cssW - w) / 2, y: UI.safe.t + (cssH - UI.safe.t - UI.safe.b - h) / 2, w, h }; }
+  UI.toast = (msg, ic) => { UI.toasts.push({ msg, icon: ic, t: 0, life: 2.6 }); if (UI.toasts.length > 3) UI.toasts.shift(); };
+  UI.hint = (msg) => { UI.hintText = msg; UI.hintT = 0; };
+  UI.open = (type, data) => { UI.modal = { type, data: data || {}, t: 0 }; UI.left = null; UI.right = null; };
+  UI.close = () => { UI.modal = null; H.audio.sfx('back'); };
+  UI.resize = (w, h) => { cssW = w; cssH = h; };
+
+  // ---- input ---------------------------------------------------------------------------------------
+  const pointers = new Map();
+  UI.bindInput = function (canvas) {
+    const pos = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); H.audio.init(); const [x, y] = pos(e);
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      const h = hitAt(x, y);
+      if (h) { pointers.set(e.pointerId, { kind: 'ui', hit: h, x, y }); pressed = h.id; pressedT = 0.25; return; }
+      if (UI.modal) { pointers.set(e.pointerId, { kind: 'modal', x, y, sx: x, sy: y, s0: UI.modal.data.scroll || 0 }); return; }
+      const side = x < cssW / 2 ? 'left' : 'right';
+      if (UI[side]) return;
+      const st = { id: e.pointerId, ox: x, oy: y, x, y, dx: 0, dy: 0, mag: 0, t: H.now(), moved: false, side };
+      UI[side] = st; pointers.set(e.pointerId, { kind: 'stick', st });
+    }, { passive: false });
+    canvas.addEventListener('pointermove', (e) => {
+      e.preventDefault(); const p = pointers.get(e.pointerId); if (!p) return; const [x, y] = pos(e);
+      if (p.kind === 'stick') { const st = p.st; st.x = x; st.y = y; let dx = x - st.ox, dy = y - st.oy; const d = Math.hypot(dx, dy); if (d > 12) st.moved = true; if (d > UI.STICK_R) { dx *= UI.STICK_R / d; dy *= UI.STICK_R / d; } st.dx = dx / UI.STICK_R; st.dy = dy / UI.STICK_R; st.mag = Math.min(1, d / UI.STICK_R); }
+      else if (p.kind === 'modal' && UI.modal && UI.modal.maxScroll) UI.modal.data.scroll = clamp(p.s0 + (p.sy - y), 0, UI.modal.maxScroll);
+    }, { passive: false });
+    const up = (e) => {
+      e.preventDefault(); const p = pointers.get(e.pointerId); if (!p) return; pointers.delete(e.pointerId); const [x, y] = pos(e);
+      if (p.kind === 'ui') { const h = hitAt(x, y); if (h && h.id === p.hit.id && h.fn) h.fn(x, y); pressed = null; return; }
+      if (p.kind === 'modal') { if (Math.hypot(x - p.sx, y - p.sy) < 10 && UI.modal && UI.modal.dismiss) UI.close(); return; }
+      const st = p.st; if (UI[st.side] === st) UI[st.side] = null;
+      if (!st.moved && H.now() - st.t < 260) H.main.interact(st.side);
+    };
+    canvas.addEventListener('pointerup', up, { passive: false });
+    canvas.addEventListener('pointercancel', (e) => { const p = pointers.get(e.pointerId); pointers.delete(e.pointerId); if (p && p.kind === 'stick' && UI[p.st.side] === p.st) UI[p.st.side] = null; pressed = null; }, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // keyboard (desktop testing): WASD / arrows move, space = use tool, E = interact
+    const keys = {}; let kbStick = null;
+    window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if (e.key === 'e' || e.key === 'Enter') H.main.interact('right'); syncKb(); });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; syncKb(); });
+    function syncKb() { const dx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0), dy = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0); if (dx || dy) { if (!kbStick) { kbStick = { id: 'kb', ox: 0, oy: 0, x: 0, y: 0, dx, dy, mag: 1, t: 0, moved: true, side: 'left', kb: true }; UI.left = kbStick; } kbStick.dx = dx; kbStick.dy = dy; kbStick.mag = 1; } else if (kbStick) { if (UI.left === kbStick) UI.left = null; kbStick = null; } if (keys[' ']) { if (!UI.right) UI.right = { id: 'kbr', ox: 0, oy: 0, x: 0, y: 0, dx: 0, dy: 0, mag: 1, t: 0, moved: true, side: 'right', kb: true }; } else if (UI.right && UI.right.kb) UI.right = null; }
+  };
+  function hitAt(x, y) { for (let i = hits.length - 1; i >= 0; i--) { const h = hits[i]; if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) return h; } return null; }
+
+  // ---- HUD --------------------------------------------------------------------------------------------
+  function drawHUD(g) {
+    const S = H.state, s = UI.safe, top = s.t + 8, left = s.l + 10, d = G.d;
+    const coinStr = H.fmt(S.coins), cw = textW(g, coinStr, 22, 900) + 52;
+    rr(g, left, top, cw, 40, 12); g.fillStyle = PAL.hud; g.fill(); icon(g, 'coin', left + 8, top + 8, 24); text(g, coinStr, left + 40, top + 20, 22, PAL.coin, 'left', 900);
+    // bag
+    const bw = Math.max(cw, 150), by = top + 46; rr(g, left, by, bw, 32, 10); g.fillStyle = PAL.hud; g.fill(); icon(g, 'bag', left + 8, by + 6, 20);
+    text(g, `${S.bag} / ${d.bagCap}`, left + 34, by + 11, 12, S.bag >= d.bagCap ? '#ff9a6a' : PAL.hudInk, 'left', 700);
+    g.fillStyle = 'rgba(255,255,255,0.15)'; rr(g, left + 34, by + 21, bw - 44, 5, 2); g.fill(); g.fillStyle = S.bag >= d.bagCap ? '#ff9a6a' : '#d8b040'; rr(g, left + 34, by + 21, (bw - 44) * clamp(S.bag / d.bagCap, 0, 1), 5, 2); g.fill();
+    // zone label (top centre)
+    const p = H.main.player, zi = p.cellar ? W.zoneIdx('cellar') : W.zoneAt((p.x / 16) | 0, (p.y / 16) | 0);
+    const z = zi >= 0 ? W.ZONES[zi] : null;
+    const zname = z ? H.t('z_' + z.id) : '', prog = z ? G.zoneProgress(z.id) : 0;
+    const total = G.totalProgress();
+    const lw = 220, lx = (cssW - lw) / 2; rr(g, lx, top, lw, 44, 12); g.fillStyle = PAL.hud; g.fill();
+    text(g, z ? `${zname}  ·  ${Math.floor(prog * 100)}%` : '', lx + lw / 2, top + 13, 13, PAL.hudInk, 'center', 800);
+    g.fillStyle = 'rgba(255,255,255,0.15)'; rr(g, lx + 12, top + 25, lw - 24, 5, 2); g.fill(); g.fillStyle = '#6ad06a'; rr(g, lx + 12, top + 25, (lw - 24) * prog, 5, 2); g.fill();
+    text(g, `${H.t('percent_total')} ${(total * 100).toFixed(1)}%`, lx + lw / 2, top + 36, 9, '#d0c0a8', 'center', 600);
+    // settings
+    const gx = cssW - s.r - 10 - 40; rr(g, gx, top, 40, 40, 12); g.fillStyle = PAL.hud; g.fill(); icon(g, 'settings', gx + 8, top + 8, 24); hit(gx - 4, top - 4, 48, 48, () => { H.audio.sfx('tap'); UI.open('settings'); }, 'settings');
+    // tool tabs (bottom centre)
+    const tools = [['hand', true], ['rake', S.up.rake > 0], ['blower', S.up.blower > 0]]; const size = 52, gap = 8, tw = tools.length * size + (tools.length - 1) * gap, tx0 = (cssW - tw) / 2, ty = cssH - s.b - size - 12;
+    rr(g, tx0 - 8, ty - 6, tw + 16, size + 12, 16); g.fillStyle = PAL.hud; g.fill();
+    tools.forEach(([id, owned], i) => { const x = tx0 + i * (size + gap), sel = S.tool === id; rr(g, x, ty, size, size, 12); g.fillStyle = sel ? 'rgba(255,220,150,0.95)' : 'rgba(255,255,255,0.12)'; g.fill(); g.globalAlpha = owned ? 1 : 0.3; icon(g, id, x + 10, ty + 10, 32); g.globalAlpha = 1; if (!owned) icon(g, 'lock', x + 34, ty + 34, 14); if (owned) hit(x, ty, size, size, () => { S.tool = id; H.audio.sfx('tap'); if (id === 'rake' && !S.flags.hintRake) { S.flags.hintRake = 1; UI.hint(H.t('hint_rake')); } if (id === 'blower' && !S.flags.hintBlower) { S.flags.hintBlower = 1; UI.hint(H.t('hint_blower')); } }, 'tool' + id); });
+  }
+  function drawSticks(g) {
+    for (const st of [UI.left, UI.right]) { if (!st || st.kb) continue; g.fillStyle = 'rgba(255,255,255,0.12)'; g.beginPath(); g.arc(st.ox, st.oy, UI.STICK_R + 8, 0, 7); g.fill(); g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 2; g.stroke(); g.fillStyle = st.side === 'right' ? 'rgba(255,200,120,0.85)' : 'rgba(255,255,255,0.75)'; g.beginPath(); g.arc(st.ox + st.dx * UI.STICK_R, st.oy + st.dy * UI.STICK_R, 22, 0, 7); g.fill(); }
+  }
+  function drawToasts(g, dt) { let y = UI.safe.t + 60; for (const t of UI.toasts) { t.t += dt; const a = t.t < 0.25 ? t.t / 0.25 : t.t > t.life - 0.5 ? Math.max(0, (t.life - t.t) / 0.5) : 1; const w = textW(g, t.msg, 14, 700) + (t.icon ? 52 : 24); g.globalAlpha = a; const x = (cssW - w) / 2; rr(g, x, y, w, 34, 12); g.fillStyle = PAL.hud; g.fill(); if (t.icon) icon(g, t.icon, x + 10, y + 6, 22); text(g, t.msg, x + (t.icon ? 40 : 12), y + 17, 14, PAL.hudInk, 'left', 700); g.globalAlpha = 1; y += 40; } UI.toasts = UI.toasts.filter((t) => t.t < t.life); }
+  function drawHint(g, dt) { if (!UI.hintText || UI.modal) return; UI.hintT = (UI.hintT || 0) + dt; const lines = wrap(g, UI.hintText, Math.min(cssW - 80, 440), 13, 600), w = Math.min(cssW - 60, 460), h = lines.length * 17 + 16, x = (cssW - w) / 2, y = cssH - UI.safe.b - 90 - h; g.globalAlpha = Math.min(1, UI.hintT / 0.3); rr(g, x, y, w, h, 12); g.fillStyle = 'rgba(246,236,216,0.94)'; g.fill(); icon(g, 'star', x + 8, y + h / 2 - 10, 20); lines.forEach((l, i) => text(g, l, x + 32, y + 13 + i * 17, 13, PAL.ink, 'left', 600)); g.globalAlpha = 1; hit(x, y, w, h, () => { UI.hintText = null; }, 'hint'); }
+
+  // ---- modals ------------------------------------------------------------------------------------------
+  function row(g, x, y, w, ic, name, desc, right) { rr(g, x, y, w, 60, 12); g.fillStyle = 'rgba(255,255,255,0.5)'; g.fill(); icon(g, ic, x + 12, y + 10, 40); text(g, name, x + 62, y + 20, 15, PAL.ink, 'left', 800); const dl = wrap(g, desc, w - 62 - 130, 11, 500); text(g, dl[0] || '', x + 62, y + 40, 11, PAL.soft, 'left', 500); if (right) right(x + w - 122, y + 10); }
+  const MODALS = {
+    title(g, m) {
+      g.fillStyle = 'rgba(10,8,6,0.45)'; g.fillRect(0, 0, cssW, cssH); const cy = cssH * 0.36;
+      g.save(); g.shadowColor = 'rgba(0,0,0,0.5)'; g.shadowBlur = 12; text(g, H.t('title'), cssW / 2, cy - 30, Math.min(78, cssW / 7), '#f6ecd8', 'center', 900); g.restore();
+      text(g, H.t('tagline'), cssW / 2, cy + 26, 20, '#e8d8b8', 'center', 500); icon(g, 'leaf', cssW / 2 - 24, cy + 50, 48);
+      const bw = Math.min(280, cssW - 60), bx = (cssW - bw) / 2; let by = cy + 120;
+      if (G.hasSave()) { btn(g, 'cont', bx, by, bw, 54, H.t('continue_game'), { size: 20, fn: () => { H.audio.sfx('buy'); H.main.continueGame(); } }); by += 66; }
+      btn(g, 'new', bx, by, bw, 54, H.t('new_game'), { size: 20, kind: G.hasSave() ? 'secondary' : 'primary', fn: () => { if (G.hasSave()) UI.open('confirm', { text: H.t('new_confirm'), yes: () => H.main.newGame() }); else H.main.newGame(); } }); by += 66;
+      btn(g, 'lang', (cssW - 150) / 2, by, 150, 40, H.lang === 'es' ? 'Español ▸ English' : 'English ▸ Español', { kind: 'secondary', size: 14, fn: () => { H.main.toggleLang(); } });
+      text(g, 'v1.0 · pixels & WebAudio, no assets', cssW / 2, cssH - UI.safe.b - 18, 12, 'rgba(246,236,216,0.7)', 'center', 500);
+    },
+    confirm(g, m) { g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH); const r = modalRect(400, 200); panel(g, r, null); const lines = wrap(g, m.data.text, r.w - 40, 16, 600); lines.forEach((l, i) => text(g, l, r.x + r.w / 2, r.y + 36 + i * 21, 16, PAL.ink, 'center', 600)); const bw = (r.w - 60) / 2; btn(g, 'yes', r.x + 20, r.y + r.h - 66, bw, 48, H.t('yes'), { fn: () => { const f = m.data.yes; UI.modal = null; f && f(); } }); btn(g, 'no', r.x + 40 + bw, r.y + r.h - 66, bw, 48, H.t('no'), { kind: 'secondary', fn: UI.close }); },
+    gate(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH); const gt = W.GATES.find((x) => x.id === m.data.id), c = G.canOpenGate(gt.id); const r = modalRect(400, 220); panel(g, r, null); icon(g, 'gate', r.x + r.w / 2 - 20, r.y + 16, 40);
+      const txt = c.reason === 'cellar' ? H.t('gate_locked_cellar') : H.t('gate_q', { zone: H.t('z_' + gt.zone), n: gt.cost });
+      wrap(g, txt, r.w - 40, 15, 600).forEach((l, i) => text(g, l, r.x + r.w / 2, r.y + 76 + i * 20, 15, PAL.ink, 'center', 600));
+      const bw = (r.w - 60) / 2;
+      if (c.reason === 'cellar') btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, H.t('ok'), { fn: UI.close });
+      else { btn(g, 'yes', r.x + 20, r.y + r.h - 66, bw, 48, `${gt.cost}`, { icon: 'coin', disabled: !c.ok, fn: () => { if (G.openGate(gt.id)) { UI.modal = null; } } }); btn(g, 'no', r.x + 40 + bw, r.y + r.h - 66, bw, 48, H.t('no'), { kind: 'secondary', fn: UI.close }); }
+    },
+    settings(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH); const r = modalRect(400, 340); panel(g, r, H.t('settings'), UI.close); const st = G.settings; let y = r.y + 66;
+      const rowb = (label, val, id, fn) => { text(g, label, r.x + 22, y + 20, 16, PAL.ink, 'left', 700); btn(g, id, r.x + r.w - 150, y, 128, 40, val, { kind: 'secondary', size: 14, fn }); y += 54; };
+      rowb(H.t('language'), H.lang === 'es' ? 'Español' : 'English', 'lang', () => H.main.toggleLang());
+      rowb(H.t('music'), st.music ? H.t('on') : H.t('off'), 'music', () => { st.music = !st.music; H.audio.setMusic(st.music); G.saveSettings(); H.audio.sfx('tap'); });
+      rowb(H.t('sound'), st.sound ? H.t('on') : H.t('off'), 'sound', () => { st.sound = !st.sound; H.audio.setSound(st.sound); G.saveSettings(); H.audio.sfx('tap'); });
+      y += 6; btn(g, 'newgame', r.x + 22, y, r.w - 44, 42, H.t('new_game'), { kind: 'secondary', fn: () => UI.open('confirm', { text: H.t('new_confirm'), yes: () => H.main.newGame() }) }); y += 54;
+      const S = H.state; text(g, `${H.t('st_leaves')}: ${S.stats.leaves}  ·  ${H.t('st_time')}: ${H.fmtTime(S.stats.time)}`, r.x + r.w / 2, y + 6, 11, PAL.soft, 'center', 500);
+    },
+    shop(g, m) {
+      g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH); const S = H.state; const r = modalRect(560, 520); panel(g, r, H.t('shop'), UI.close);
+      icon(g, 'coin', r.x + r.w - 150, r.y + 16, 24); text(g, H.fmt(S.coins), r.x + r.w - 120, r.y + 28, 18, PAL.ink, 'left', 800);
+      const tabs = [['tools', H.t('tab_tools')], ['body', H.t('tab_body')], ['yard', H.t('tab_yard')]]; const tab = m.data.tab || 'tools', tw = (r.w - 40) / tabs.length;
+      tabs.forEach(([id, label], i) => { const x = r.x + 20 + i * tw, y = r.y + 54; rr(g, x + 2, y, tw - 4, 36, 10); g.fillStyle = tab === id ? PAL.accent : PAL.panelD; g.fill(); text(g, label, x + tw / 2, y + 18, 14, tab === id ? '#fff8ec' : PAL.ink, 'center', 700); hit(x, y, tw, 36, () => { m.data.tab = id; m.data.scroll = 0; H.audio.sfx('tap'); }, 'tab' + id); });
+      const listY = r.y + 100, listH = r.h - 112, rx = r.x + 16, rw = r.w - 32; const scroll = m.data.scroll || 0; let y = listY - scroll + 4;
+      g.save(); g.beginPath(); g.rect(r.x, listY, r.w, listH); g.clip();
+      const buyBtn = (id, cost, can, fn) => (x, yy) => { if (cost === null) { rr(g, x, yy + 4, 110, 32, 10); g.fillStyle = 'rgba(0,0,0,0.08)'; g.fill(); text(g, H.t('max'), x + 55, yy + 20, 13, PAL.soft, 'center', 800); } else btn(g, 'buy' + id, x, yy, 110, 40, `${cost}`, { icon: 'coin', size: 14, disabled: !can, fn }); };
+      if (tab === 'tools') {
+        const U = H.UPG, u = S.up;
+        row(g, rx, y, rw, 'rake', `${H.t('up_rake')}  ${u.rake ? H.t('lv') + ' ' + u.rake : ''}`, u.rake ? H.t('up_rake_d', { w: U.rake.w[Math.min(u.rake + 1, 4)] }) : H.t('up_rake_buy'), buyBtn('rake', G.nextCost('rake'), S.coins >= (G.nextCost('rake') || 0), () => { if (G.buy('rake')) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68;
+        row(g, rx, y, rw, 'blower', `${H.t('up_blower')}  ${u.blower ? H.t('lv') + ' ' + u.blower : ''}`, u.blower ? H.t('up_blower_d', { p: U.blower.power[Math.min(u.blower + 1, 5)], r: U.blower.range[Math.min(u.blower + 1, 5)] }) : H.t('up_blower_buy'), buyBtn('blower', G.nextCost('blower'), S.coins >= (G.nextCost('blower') || 0), () => { if (G.buy('blower')) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68;
+      } else if (tab === 'body') {
+        const U = H.UPG, u = S.up;
+        row(g, rx, y, rw, 'bag', `${H.t('up_bag')}  ${H.t('lv')} ${u.bag}`, H.t('up_bag_d', { n: U.bag.caps[Math.min(u.bag + 1, 5)] }), buyBtn('bag', G.nextCost('bag'), S.coins >= (G.nextCost('bag') || 0), () => { if (G.buy('bag')) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68;
+        row(g, rx, y, rw, 'shoes', `${H.t('up_shoes')}  ${H.t('lv')} ${u.shoes}`, H.t('up_shoes_d', { s: U.shoes.speed[Math.min(u.shoes + 1, 3)] }), buyBtn('shoes', G.nextCost('shoes'), S.coins >= (G.nextCost('shoes') || 0), () => { if (G.buy('shoes')) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68;
+        row(g, rx, y, rw, 'gloves', `${H.t('up_gloves')}  ${H.t('lv')} ${u.gloves}`, H.t('up_gloves_d', { n: U.gloves.rate[Math.min(u.gloves + 1, 2)] }), buyBtn('gloves', G.nextCost('gloves'), S.coins >= (G.nextCost('gloves') || 0), () => { if (G.buy('gloves')) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68;
+      } else {
+        for (const gt of W.GATES) { const open = S.gates[gt.id]; const c = G.canOpenGate(gt.id); row(g, rx, y, rw, 'gate', `${H.t('gate')} → ${H.t('z_' + gt.zone)}`, open ? H.t('owned') : c.reason === 'cellar' ? H.t('gate_locked_cellar') : H.t('gate_d', { zone: H.t('z_' + gt.zone) }), open ? (x, yy) => icon(g, 'check', x + 40, yy + 8, 28) : buyBtn(gt.id, gt.cost, c.ok, () => { if (G.openGate(gt.id)) H.audio.sfx('gate'); else H.audio.sfx('error'); })); y += 68; }
+        for (const b of W.BINS) { if (!b.cost) continue; const own = S.bins[b.id], unl = G.zoneUnlocked(b.zone); row(g, rx, y, rw, 'bin', `${H.t('bin')} · ${H.t('z_' + b.zone)}`, own ? H.t('owned') : unl ? H.t('bin_d') : H.t('locked'), own ? (x, yy) => icon(g, 'check', x + 40, yy + 8, 28) : buyBtn(b.id, b.cost, unl && S.coins >= b.cost, () => { if (G.buyBin(b.id)) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68; }
+        for (const v of W.VENTS) { const own = S.vents[v.id], unl = G.zoneUnlocked(v.zone); row(g, rx, y, rw, 'vent', `${H.t('vent')} · ${H.t('z_' + v.zone)}`, own ? H.t('owned') : unl ? H.t('vent_d') : H.t('locked'), own ? (x, yy) => icon(g, 'check', x + 40, yy + 8, 28) : buyBtn(v.id, v.cost, unl && S.coins >= v.cost, () => { if (G.buyVent(v.id)) H.audio.sfx('buy'); else H.audio.sfx('error'); })); y += 68; }
+      }
+      g.restore(); m.maxScroll = Math.max(0, y + scroll - listY - listH + 8);
+    },
+    zone(g, m) { g.fillStyle = PAL.dim; g.fillRect(0, 0, cssW, cssH); const r = modalRect(420, 240); panel(g, r, null); icon(g, 'trophy', r.x + r.w / 2 - 24, r.y + 18, 48); text(g, H.t('zone_done', { zone: H.t('z_' + m.data.id) }), r.x + r.w / 2, r.y + 90, 20, PAL.ink, 'center', 800); wrap(g, H.t('bonus_' + m.data.id), r.w - 40, 15, 600).forEach((l, i) => text(g, l, r.x + r.w / 2, r.y + 122 + i * 20, 15, PAL.green, 'center', 700)); btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, H.t('ok'), { fn: () => { UI.modal = null; H.audio.sfx('buy'); } }); },
+    ending(g, m) {
+      g.fillStyle = 'rgba(8,6,4,0.7)'; g.fillRect(0, 0, cssW, cssH); const S = H.state; const r = modalRect(460, 440); panel(g, r, H.t('ending_title')); icon(g, 'golden', r.x + r.w - 56, r.y + 14, 36);
+      let y = r.y + 66; wrap(g, H.t('ending_body'), r.w - 44, 15, 500).forEach((l) => { text(g, l, r.x + 22, y, 15, PAL.ink, 'left', 500); y += 21; }); y += 10;
+      const rows = [['st_leaves', S.stats.leaves], ['st_coins', H.fmt(S.stats.coins)], ['st_dumps', S.stats.dumps], ['st_blown', S.stats.blown || LV.blownCount], ['st_time', H.fmtTime(S.stats.time)]];
+      rows.forEach(([k, v]) => { text(g, H.t(k), r.x + 22, y, 13, PAL.soft, 'left', 600); text(g, String(v), r.x + r.w - 22, y, 14, PAL.ink, 'right', 800); y += 24; });
+      btn(g, 'ok', r.x + r.w / 2 - 70, r.y + r.h - 64, 140, 46, H.t('ok'), { fn: () => { UI.modal = null; } });
+    },
+  };
+  UI.update = (dt) => { if (pressedT > 0) pressedT -= dt; if (UI.modal) UI.modal.t += dt; };
+  UI.draw = function (g, dt) {
+    hits = []; g.imageSmoothingEnabled = false;
+    if (H.main.mode === 'play') { drawSticks(g); drawHUD(g); drawToasts(g, dt); drawHint(g, dt); }
+    if (UI.modal) { const m = UI.modal; m.dismiss = m.type === 'shop' || m.type === 'settings'; const fn = MODALS[m.type]; if (fn) fn(g, m); }
+  };
+  UI.__hits = () => hits;
+})();
+
+</script>
+<script>
+/* Hojarasca — 70_main.js  Loop, player movement, tools, interactions, camera, rendering, lighting. */
+(function () {
+  'use strict';
+  const H = window.Hojarasca;
+  const { clamp, lerp } = H.math;
+  const T = H.TILE, MW = H.MAP_W, MH = H.MAP_H, A = H.art, W = H.world, LV = H.leaves, G = H.game, UI = H.ui;
+  const MN = (H.main = { mode: 'title', scale: 3, dpr: 1, cssW: 0, cssH: 0, cam: { x: 0, y: 0 }, player: null });
+  let canvas, g, worldCv, worldG, lightCv, lightG, lastNow = 0, autosaveT = 0, particles = [], gustT = 45, gust = { x: 0, y: 0, t: 0 }, gatePromptT = 0, pickT = 0;
+  H.time = 0;
+
+  MN.init = function () {
+    canvas = document.getElementById('game'); g = canvas.getContext('2d');
+    G.loadSettings(); H.audio.setMusic(G.settings.music); H.audio.setSound(G.settings.sound);
+    worldCv = H.canvas(320, 240); worldG = H.ctx2d(worldCv); lightCv = H.canvas(320, 240); lightG = H.ctx2d(lightCv);
+    W.build();
+    G.start(G.load());
+    MN.player = { x: H.state.player.x, y: H.state.player.y, dir: 0, frame: 0, animT: 0, vx: 0, vy: 0, aim: Math.PI / 2, cellar: !!H.state.inCellar, active: false };
+    MN.resize();
+    window.addEventListener('resize', MN.resize); window.addEventListener('orientationchange', () => setTimeout(MN.resize, 120)); if (window.visualViewport) window.visualViewport.addEventListener('resize', MN.resize);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { if (MN.mode === 'play') G.save(); H.audio.suspend(); } else H.audio.resume(); });
+    window.addEventListener('pagehide', () => { if (MN.mode === 'play') G.save(); });
+    UI.bindInput(canvas); bindEvents();
+    UI.open('title');
+    requestAnimationFrame(loop);
+  };
+  MN.resize = function () {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3), cw = window.innerWidth, ch = window.innerHeight;
+    MN.dpr = dpr; MN.cssW = cw; MN.cssH = ch; canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr); canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+    MN.scale = clamp(Math.round(Math.min(cw, ch) / (T * 15)), 2, 6);
+    worldCv.width = Math.min(Math.ceil(cw / MN.scale) + 1, MW * T); worldCv.height = Math.min(Math.ceil(ch / MN.scale) + 1, MH * T); lightCv.width = worldCv.width; lightCv.height = worldCv.height; worldG.imageSmoothingEnabled = false;
+    try { let probe = document.getElementById('safeprobe'); if (!probe) { probe = document.createElement('div'); probe.id = 'safeprobe'; probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left)'; document.body.appendChild(probe); } const cs = getComputedStyle(probe); UI.safe = { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 }; } catch (e) { /* ignore */ }
+    UI.resize(cw, ch);
+  };
+  MN.newGame = function () { G.clear(); G.start(null); const p = MN.player; p.x = H.state.player.x; p.y = H.state.player.y; p.cellar = false; UI.modal = null; MN.mode = 'play'; particles = []; G.save(); setTimeout(() => UI.hint(H.t('hint_move')), 800); };
+  MN.continueGame = function () { UI.modal = null; MN.mode = 'play'; };
+  MN.toggleLang = function () { const s = G.settings; s.lang = H.lang === 'es' ? 'en' : 'es'; H.setLang(s.lang); G.saveSettings(); H.audio.sfx('tap'); };
+  MN.worldToScreen = (wx, wy) => [(wx - MN.cam.x) * MN.scale, (wy - MN.cam.y) * MN.scale];
+
+  function bindEvents() {
+    H.on('dump', (v) => { UI.toast(H.t('dumped', { n: v }), 'coin'); H.audio.sfx('dump'); const p = MN.player; for (let i = 0; i < 8; i++) burst(p.x, p.y - 8, '#ffd860', 1); if (!H.state.flags.hintShop) { H.state.flags.hintShop = 1; setTimeout(() => UI.hint(H.t('hint_shop')), 600); } });
+    H.on('sold', (d) => { if (Math.random() < 0.15) H.audio.sfx('coin'); const i = d.i; burst(LV.X[i], LV.Y[i], '#ffd860', 1); });
+    H.on('buy', () => G.save());
+    H.on('gate', (id) => { H.audio.sfx(id === 'cellar' ? 'hatch' : 'gate'); G.save(); if (!H.state.flags.hintGate) H.state.flags.hintGate = 1; });
+    H.on('zoneDone', (id) => { if (id !== 'cellar') { UI.open('zone', { id }); H.audio.sfx('zone'); } G.save(); });
+    H.on('ending', () => { setTimeout(() => { UI.open('ending'); H.audio.sfx('ending'); }, 800); });
+  }
+
+  // ---- interactions ----------------------------------------------------------------------------------
+  MN.interact = function (side) {
+    if (MN.mode !== 'play' || UI.modal) return; const p = MN.player, S = H.state, tx = (p.x / T) | 0, ty = (p.y / T) | 0;
+    const near = (ox, oy, r) => Math.hypot(ox * T + 8 - p.x, oy * T + 8 - p.y) < r;
+    for (const b of W.BINS) if (S.bins[b.id] && near(b.tx, b.ty, 30)) { if (S.bag > 0) G.dump(); UI.open('shop'); H.audio.sfx('tap'); return; }
+    for (const gt of W.GATES) if (gt.orient !== 'hatch' && near(gt.tx, gt.ty, 30) && !S.gates[gt.id]) { UI.open('gate', { id: gt.id }); return; }
+    if (!p.cellar && near(W.HATCH.tx, W.HATCH.ty, 26)) { if (S.gates.cellar) { MN.teleport(W.CELLAR_IN.tx, W.CELLAR_IN.ty, true); H.audio.sfx('hatch'); } else UI.open('gate', { id: 'cellar' }); return; }
+    if (p.cellar && near(W.LADDER.tx, W.LADDER.ty, 26)) { MN.teleport(W.HATCH_OUT.tx, W.HATCH_OUT.ty, false); H.audio.sfx('hatch'); return; }
+    for (const v of W.VENTS) if (!S.vents[v.id] && near(v.tx, v.ty, 24) && G.zoneUnlocked(v.zone)) { UI.open('shop', { tab: 'yard' }); return; }
+    // otherwise: a quick hand grab burst
+    if (S.tool === 'hand') { const ids = LV.near(p.x, p.y, G.d.handR * 1.6, 6); for (const i of ids) if (G.pickup(i)) burst(LV.X[i], LV.Y[i], '#e08a30', 1); if (ids.length) H.audio.sfx('rustle'); }
+  };
+  MN.teleport = function (tx, ty, cellar) { const p = MN.player; p.x = tx * T + 8; p.y = ty * T + 12; p.cellar = cellar; MN.cam.x = clamp(p.x - worldCv.width / 2, 0, MW * T - worldCv.width); MN.cam.y = clamp(p.y - worldCv.height / 2, 0, MH * T - worldCv.height); G.save(); };
+
+  // ---- update ------------------------------------------------------------------------------------------
+  function loop(now) { const dt = Math.min(0.05, (now - (lastNow || now)) / 1000); lastNow = now; H.time += dt; update(dt); render(dt); requestAnimationFrame(loop); }
+  function update(dt) {
+    UI.update(dt); const S = H.state, p = MN.player, d = G.d;
+    const playing = MN.mode === 'play' && !UI.modal;
+    if (playing) {
+      S.stats.time += dt;
+      // movement
+      const L = UI.left; let mx = 0, my = 0;
+      if (L && L.mag > 0.08) { mx = L.dx * d.speed; my = L.dy * d.speed; }
+      p.vx = mx; p.vy = my;
+      if (mx || my) { moveWithCollision(p, mx * dt, my * dt); p.animT += dt; p.frame = 1 + (Math.floor(p.animT * 7) % 2); }
+      else { p.frame = 0; p.animT = 0; }
+      // aim & tool
+      const R = UI.right; p.active = !!R && (R.mag > 0.15 || R.kb);
+      if (R && R.mag > 0.15) p.aim = Math.atan2(R.dy, R.dx); else if (mx || my) p.aim = Math.atan2(my, mx);
+      const a = p.aim; p.dir = Math.abs(Math.cos(a)) > Math.abs(Math.sin(a)) ? (Math.cos(a) > 0 ? 2 : 1) : (Math.sin(a) > 0 ? 0 : 3);
+      // gusts
+      gustT -= dt; if (gustT <= 0) { gustT = 40 + Math.random() * 50; gust = { x: (Math.random() - 0.5) * 60, y: (Math.random() - 0.5) * 30, t: 3 }; UI.toast(H.t('wind'), 'wind'); H.audio.sfx('gust'); }
+      if (gust.t > 0) gust.t -= dt;
+      const wind = gust.t > 0 ? { x: gust.x * Math.min(1, gust.t), y: gust.y * Math.min(1, gust.t) } : { x: 0, y: 0 };
+      // leaves
+      const tool = S.tool === 'rake' && !S.up.rake ? 'hand' : S.tool === 'blower' && !S.up.blower ? 'hand' : S.tool;
+      LV.update(dt, { px: p.x, py: p.y - 4, tool, aim: p.aim, active: p.active, mvx: p.vx, mvy: p.vy, blower: d.blower, rake: { w: d.rakeW }, vents: G.activeVents(), bins: G.activeBins(), wind });
+      // hand pickup while walking / holding
+      if (tool === 'hand') { pickT += dt * d.handRate; if (pickT >= 1) { const n = Math.floor(pickT); pickT -= n; const ids = LV.near(p.x, p.y - 2, d.handR, n); let got = 0; for (const i of ids) if (G.pickup(i)) { got++; burst(LV.X[i], LV.Y[i], '#e08a30', 1); } if (got) H.audio.sfx('rustle'); else if (ids.length && S.bag >= d.bagCap) { if (!S.flags.fullWarned || H.time - S.flags.fullWarned > 6) { S.flags.fullWarned = H.time; UI.toast(H.t('bag_full'), 'bag'); H.audio.sfx('full'); if (!S.flags.hintDump) { S.flags.hintDump = 1; UI.hint(H.t('hint_dump')); } } } } }
+      // auto-dump when brushing a bin
+      for (const b of W.BINS) if (S.bins[b.id] && S.bag > 0 && Math.hypot(b.tx * T + 8 - p.x, b.ty * T + 8 - p.y) < 18) G.dump();
+      // gate prompt when walking into a locked gate
+      gatePromptT -= dt; if (gatePromptT <= 0) for (const gt of W.GATES) { if (S.gates[gt.id] || gt.orient === 'hatch') continue; if (Math.hypot(gt.tx * T + 8 - p.x, gt.ty * T + 8 - p.y) < 20 && (mx || my)) { gatePromptT = 4; UI.open('gate', { id: gt.id }); if (!S.flags.hintGate) { S.flags.hintGate = 1; } break; } }
+      // blower particles & vent sparkle
+      if (tool === 'blower' && p.active && d.blower.power > 0 && Math.random() < 0.8) { for (let i = 0; i < 2; i++) { const ang = p.aim + (Math.random() - 0.5) * d.blower.cone * 0.8, sp = 60 + Math.random() * 80 * d.blower.power; particles.push({ x: p.x + Math.cos(p.aim) * 10, y: p.y - 6 + Math.sin(p.aim) * 10, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0.35 + Math.random() * 0.3, t: 0, c: 'rgba(255,240,210,0.35)', s: 2 }); } }
+      for (const v of G.activeVents()) if (Math.random() < 0.25 && Math.abs(v.x - p.x) < 200 && Math.abs(v.y - p.y) < 160) { const ang = Math.random() * 6.28, r = v.r * 0.9; particles.push({ x: v.x + Math.cos(ang) * r, y: v.y + Math.sin(ang) * r, vx: -Math.cos(ang) * 40, vy: -Math.sin(ang) * 40, life: 0.6, t: 0, c: 'rgba(200,220,255,0.35)', s: 1 }); }
+      // audio env
+      H.audio.env.blower = tool === 'blower' && p.active && d.blower.power > 0 ? 1 : 0; H.audio.env.blowerPower = S.up.blower; H.audio.env.rake = tool === 'rake' && p.active && (mx || my) ? 1 : 0;
+      let vn = 0; for (const v of G.activeVents()) if (Math.hypot(v.x - p.x, v.y - p.y) < 120) vn = 1; H.audio.env.vent = vn;
+      autosaveT += dt; if (autosaveT > 15) { autosaveT = 0; G.save(); }
+    }
+    H.audio.env.night = nightAmount(); H.audio.update(dt);
+    // camera
+    const tx = clamp(p.x - worldCv.width / 2, 0, MW * T - worldCv.width), ty = clamp(p.y - 8 - worldCv.height / 2, p.cellar ? 49 * T : 0, MH * T - worldCv.height);
+    const k = 1 - Math.exp(-dt * 6); MN.cam.x = lerp(MN.cam.x, tx, k); MN.cam.y = lerp(MN.cam.y, ty, k);
+    for (const pt of particles) { pt.t += dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.vx *= 0.96; pt.vy *= 0.96; } particles = particles.filter((pt) => pt.t < pt.life);
+    if (particles.length > 400) particles.splice(0, particles.length - 400);
+  }
+  function moveWithCollision(p, dx, dy) {
+    const free = (x, y) => { const x0 = ((x - 4) / T) | 0, x1 = ((x + 4) / T) | 0, y0 = ((y - 2) / T) | 0, y1 = ((y + 1) / T) | 0; return !W.blocked(x0, y0) && !W.blocked(x1, y0) && !W.blocked(x0, y1) && !W.blocked(x1, y1); };
+    if (free(p.x + dx, p.y)) p.x += dx; if (free(p.x, p.y + dy)) p.y += dy;
+  }
+  function burst(x, y, c, n) { for (let i = 0; i < n; i++) particles.push({ x, y, vx: (Math.random() - 0.5) * 40, vy: -20 - Math.random() * 30, life: 0.4, t: 0, c, s: 1 }); }
+  function nightAmount() { if (MN.player && MN.player.cellar) return 1; const c = (H.state ? H.state.stats.time : 0) % 1200 / 1200; if (c < 0.55) return 0; if (c < 0.68) return (c - 0.55) / 0.13; if (c < 0.9) return 1; return 1 - (c - 0.9) / 0.1; }
+
+  // ---- render ---------------------------------------------------------------------------------------------
+  function render(dt) {
+    const S = H.state, p = MN.player, wg = worldG, wv = worldCv.width, wh = worldCv.height, ox = Math.round(MN.cam.x), oy = Math.round(MN.cam.y), tiles = A.tiles();
+    wg.globalCompositeOperation = 'source-over'; wg.fillStyle = '#1a1410'; wg.fillRect(0, 0, wv, wh);
+    const x0 = Math.max(0, (ox / T) | 0), y0 = Math.max(0, (oy / T) | 0), x1 = Math.min(MW - 1, Math.ceil((ox + wv) / T)), y1 = Math.min(MH - 1, Math.ceil((oy + wh) / T)), wf = (H.time * 3 | 0) % 4;
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+      const i = W.idx(tx, ty), gnd = W.ground[i], px = tx * T - ox, py = ty * T - oy; let img;
+      switch (gnd) { case H.G.GRASS: img = tiles.grass[W.gvar[i]]; break; case H.G.PATH: img = tiles.path; break; case H.G.CONCRETE: img = tiles.concrete; break; case H.G.WATER: img = tiles.water[(wf + ((tx + ty) & 1) * 2) % 4]; break; case H.G.DECK: img = tiles.deck; break; case H.G.GLASS: img = tiles.glass; break; case H.G.STONE: img = tiles.stone; break; case H.G.SOIL: img = tiles.soil; break; case H.G.SAND: img = tiles.sand; break; case H.G.ROAD: img = tiles.road; break; case H.G.PORCH: img = tiles.porch; break; case H.G.SIDEWALK: img = tiles.sidewalk; break; case H.G.RUG: img = tiles.rug; break; default: img = tiles.void; }
+      wg.drawImage(img, px, py);
+      if (gnd === H.G.ROAD && ty === 46 && tx % 4 < 2) { wg.fillStyle = '#d8d0a0'; wg.fillRect(px, py + 7, T, 2); }
+    }
+    // tree shadows (low sun from the west)
+    wg.fillStyle = 'rgba(20,10,0,0.18)';
+    for (const t of W.trees) { const sx = t.tx * T + 8 - ox, sy = t.ty * T + 14 - oy; if (sx < -40 || sy < -20 || sx > wv + 40 || sy > wh + 20) continue; wg.beginPath(); wg.ellipse(sx + 10, sy, 18, 6, 0, 0, 7); wg.fill(); }
+    // vent suction rings
+    for (const v of G.activeVents()) { const vx = v.x - ox, vy = v.y - oy; if (vx < -40 || vy < -40 || vx > wv + 40 || vy > wh + 40) continue; wg.strokeStyle = 'rgba(200,220,255,0.18)'; wg.lineWidth = 1; wg.beginPath(); wg.arc(vx, vy, v.r * (0.6 + 0.4 * ((H.time * 0.7) % 1)), 0, 7); wg.stroke(); }
+    // leaves
+    LV.draw(wg, ox, oy, wv, wh);
+    // objects + player, painter sorted
+    const list = [];
+    for (const o of W.objects) { const px = o.px - ox, py = o.py - oy; if (px > wv + 8 || py > wh + 8 || px + o.w * T + 40 < -8 || py + o.h * T + 48 < -8) continue; list.push({ baseY: o.baseY, draw: () => drawObject(wg, o, px, py) }); }
+    list.push({ baseY: p.y, draw: () => drawPlayer(wg, p, ox, oy) });
+    list.sort((a, b) => a.baseY - b.baseY); for (const it of list) it.draw();
+    // particles & blower cone
+    for (const pt of particles) { wg.globalAlpha = Math.max(0, 1 - pt.t / pt.life); wg.fillStyle = pt.c; wg.fillRect(Math.round(pt.x - ox), Math.round(pt.y - oy), pt.s, pt.s); } wg.globalAlpha = 1;
+    // lighting
+    drawLighting(wg, ox, oy);
+    // blit + UI
+    const dpr = MN.dpr, sc = MN.scale; g.setTransform(1, 0, 0, 1, 0, 0); g.imageSmoothingEnabled = false; g.fillStyle = '#1a1410'; g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(worldCv, 0, 0, wv, wh, 0, 0, Math.round(wv * sc * dpr), Math.round(wh * sc * dpr));
+    g.setTransform(dpr, 0, 0, dpr, 0, 0); UI.draw(g, dt);
+  }
+  function drawObject(wg, o, px, py) {
+    const S = H.state;
+    switch (o.kind) {
+      case 'tree': wg.drawImage(A.tree(o.tkind, o.seed), px, py); break;
+      case 'house': wg.drawImage(A.house(), px, py); break;
+      case 'greenhouse': wg.drawImage(A.greenhouse(), px, py); break;
+      case 'shed': wg.drawImage(A.shed(), px, py); break;
+      case 'car': wg.drawImage(A.car(), px, py); break;
+      case 'sandbox': wg.drawImage(A.sandbox(), px, py); break;
+      case 'poolladder': wg.drawImage(A.poolLadder(), px, py); break;
+      case 'deckchair': wg.drawImage(A.deckChair(), px, py); break;
+      case 'fence': wg.drawImage(A.fence(o.fk), px, py); break;
+      case 'gate': wg.drawImage(A.gate(!!S.gates[o.gate.id]), px, py); break;
+      case 'hatch': wg.drawImage(A.hatch(), px, py); break;
+      case 'ladder': wg.drawImage(A.ladder(), px, py); break;
+      case 'hedge': wg.drawImage(A.hedge(), px, py); break;
+      case 'bush': wg.drawImage(A.bush(o.seed), px, py); break;
+      case 'mailbox': wg.drawImage(A.mailbox(), px, py); break;
+      case 'pot': wg.drawImage(A.pot(o.seed), px, py); break;
+      case 'lantern': wg.drawImage(A.lantern(nightAmount() > 0.3), px, py); break;
+      case 'bin': if (S.bins[o.bin.id]) wg.drawImage(A.bin(false), px, py); else { wg.globalAlpha = 0.35; wg.drawImage(A.bin(false), px, py); wg.globalAlpha = 1; } break;
+      case 'vent': if (S.vents[o.vent.id]) wg.drawImage(A.vent((H.time * 6 | 0) % 2), px, py); else if (G.zoneUnlocked(o.vent.zone)) wg.drawImage(A.ventOff(), px, py); break;
+      case 'table': wg.drawImage(A.table(), px, py); break;
+      case 'chair': wg.drawImage(A.chair(), px, py); break;
+      case 'stove': wg.drawImage(A.stove(), px, py); break;
+      default: break;
+    }
+  }
+  function drawPlayer(wg, p, ox, oy) {
+    const S = H.state, x = Math.round(p.x - ox), y = Math.round(p.y - oy), tool = S.tool;
+    wg.fillStyle = 'rgba(0,0,0,0.2)'; wg.fillRect(x - 5, y - 1, 10, 2);
+    const toolImg = tool === 'rake' && S.up.rake ? A.rakeTool(p.dir) : tool === 'blower' && S.up.blower ? A.blowerTool(p.dir) : null;
+    const tp = p.dir === 0 ? [x - 12, y - 10] : p.dir === 3 ? [x - 12, y - 30] : p.dir === 2 ? [x - 2, y - 22] : [x - 22, y - 22];
+    if (toolImg && p.dir === 3) wg.drawImage(toolImg, tp[0], tp[1]);
+    wg.drawImage(A.human(A.PLAYER, p.dir, p.frame), x - 8, y - 20);
+    if (toolImg && p.dir !== 3) wg.drawImage(toolImg, tp[0], tp[1]);
+    if (tool === 'blower' && p.active && G.d.blower.power > 0) { const a = p.aim, r = G.d.blower.range, c = G.d.blower.cone / 2; wg.fillStyle = 'rgba(255,255,255,0.08)'; wg.beginPath(); wg.moveTo(x + Math.cos(a) * 8, y - 4 + Math.sin(a) * 8); wg.arc(x, y - 4, r, a - c, a + c); wg.closePath(); wg.fill(); }
+    if (tool === 'rake' && p.active && G.d.rakeW > 0) { const a = p.aim, w = G.d.rakeW * T; wg.strokeStyle = 'rgba(255,255,255,0.25)'; wg.lineWidth = 1; wg.beginPath(); wg.moveTo(x + Math.cos(a) * 12 - Math.sin(a) * w / 2, y - 4 + Math.sin(a) * 12 + Math.cos(a) * w / 2); wg.lineTo(x + Math.cos(a) * 12 + Math.sin(a) * w / 2, y - 4 + Math.sin(a) * 12 - Math.cos(a) * w / 2); wg.stroke(); }
+  }
+  function drawLighting(wg, ox, oy) {
+    const night = nightAmount(), wv = worldCv.width, wh = worldCv.height; const dusk = night > 0 && night < 1 ? 4 * night * (1 - night) : 0;
+    if (dusk > 0.01) { wg.fillStyle = `rgba(255,140,60,${0.14 * dusk})`; wg.fillRect(0, 0, wv, wh); }
+    if (night < 0.02) return;
+    const lg = lightG; lg.globalCompositeOperation = 'source-over'; lg.clearRect(0, 0, wv, wh); lg.fillStyle = `rgba(14,18,50,${0.66 * night})`; lg.fillRect(0, 0, wv, wh);
+    lg.globalCompositeOperation = 'destination-out';
+    const lights = W.lights.concat([{ x: MN.player.x, y: MN.player.y - 8, r: 26, color: '#ffffff' }]);
+    for (const L of lights) { const lx = L.x - ox, ly = L.y - oy; if (lx < -80 || ly < -80 || lx > wv + 80 || ly > wh + 80) continue; const r = L.r * (1 + 0.04 * Math.sin(H.time * 6 + lx)); const gr = lg.createRadialGradient(lx, ly, 0, lx, ly, r); gr.addColorStop(0, `rgba(0,0,0,${0.95 * night})`); gr.addColorStop(0.5, `rgba(0,0,0,${0.6 * night})`); gr.addColorStop(1, 'rgba(0,0,0,0)'); lg.fillStyle = gr; lg.fillRect(lx - r, ly - r, r * 2, r * 2); }
+    wg.drawImage(lightCv, 0, 0);
+    wg.globalCompositeOperation = 'lighter';
+    for (const L of W.lights) { const lx = L.x - ox, ly = L.y - oy; if (lx < -80 || ly < -80 || lx > wv + 80 || ly > wh + 80) continue; const r = L.r * 0.8, gr = wg.createRadialGradient(lx, ly, 0, lx, ly, r); gr.addColorStop(0, H.color.rgba(L.color, 0.28 * night)); gr.addColorStop(1, H.color.rgba(L.color, 0)); wg.fillStyle = gr; wg.fillRect(lx - r, ly - r, r * 2, r * 2); }
+    wg.globalCompositeOperation = 'source-over';
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', MN.init); else MN.init();
+})();
+
+</script>
