@@ -62,6 +62,8 @@ export class Climber {
   get onLadder() { return this.state === 'ladder' || this.state === 'falling'; }
   get anchorY() { return this.anchor === null ? null : this.tower.anchors[this.anchor]; }
   say(key: string, dur = 2.2) { this.message = t(key); this.messageT = dur; }
+  /** Keyboard hint for prompts; hidden on touch devices. */
+  private k(key: string) { return this.input.isTouch ? '' : ` (${key})`; }
 
   // ---------- input handling ----------
   private handleLook(dt: number, invertY: boolean, sens: number) {
@@ -110,8 +112,8 @@ export class Climber {
     } else {
       const p = this.tower.platforms[this.lastPlatform]; const gapZ = p.hw + 1.1;
       if (Math.abs(this.pos.x) < 0.9 && this.pos.z > gapZ - 1.0) { this.prompt = t('grabLadder'); if (this.input.pressed.has('act')) this.mountLadder(p.y); }
-      if (p.y === this.tower.topY && !this.repaired) { const d = this.pos.distanceTo(new THREE.Vector3(this.tower.transmitter.x, this.pos.y, this.tower.transmitter.z)); if (d < 2.0) { this.prompt = `${t('repair')} — ${t('hold')} F`; if (this.input.held.has('act')) this.startRepair(); } }
-      if (this.input.pressed.has('rest')) this.startRest(); else if (!this.prompt) this.prompt = `${t('rest')} (V)`;
+      if (p.y === this.tower.topY && !this.repaired) { const d = this.pos.distanceTo(new THREE.Vector3(this.tower.transmitter.x, this.pos.y, this.tower.transmitter.z)); if (d < 2.0) { this.prompt = this.input.isTouch ? `${t('repair')} — ${t('hold')} ${t('tAct')}` : `${t('repair')} — ${t('hold')} F`; if (this.input.held.has('act')) this.startRepair(); } }
+      if (this.input.pressed.has('rest')) this.startRest(); else if (!this.prompt) this.prompt = `${t('rest')}${this.k('V')}`;
     }
     if (this.input.pressed.has('photo') && this.perks.camera) this.emit('photo');
   }
@@ -173,8 +175,8 @@ export class Climber {
   private clampLeash(targetFeetY: number) { const ay = this.anchorY; if (ay === null) return targetFeetY; const c = targetFeetY + CHEST; return clamp(c, ay - this.leash, ay + this.leash) - CHEST; }
   private promptLeash() {
     const ay = this.anchorY; const near = this.nearestAnchor();
-    if (ay === null) { if (near !== null) this.prompt = `${t('clipHint')} (Space)`; }
-    else if (Math.abs(this.chest - ay) > this.leash - 0.4) this.prompt = near !== null && near !== this.anchor ? `${t('reclip')} (Space)` : t('noAnchor');
+    if (ay === null) { if (near !== null) this.prompt = `${t('clipHint')}${this.k('Space')}`; }
+    else if (Math.abs(this.chest - ay) > this.leash - 0.4) this.prompt = near !== null && near !== this.anchor ? `${t('reclip')}${this.k('Space')}` : t('noAnchor');
   }
   private nearestAnchor(): number | null { const A = this.tower.anchors; let best: number | null = null, bd = 1.35; for (let i = 0; i < A.length; i++) { const d = Math.abs(A[i] - this.chest); if (d < bd) { bd = d; best = i; } } return best; }
   private tryClip() {
@@ -222,7 +224,7 @@ export class Climber {
   get repairLabel() { return this.state === 'repair' ? t(this.repairSteps[this.repairStep]) : ''; }
   private stepDur() { const k = this.repairSteps[this.repairStep]; return k === 'rTune' ? (this.perks.analyzer ? 0.6 : 4.5) : k === 'rBattery' ? 3 : 1.8; }
   private updateRepair(dt: number) {
-    this.prompt = `${t('hold')} F`;
+    this.prompt = this.input.isTouch ? `${t('hold')} ${t('tAct')}` : `${t('hold')} F`;
     if (this.input.held.has('act')) { this.repairT += dt; if (this.repairT % 0.5 < dt) audio.click(); }
     else this.repairT = Math.max(0, this.repairT - dt * 0.6);
     if (this.repairT >= this.stepDur()) { this.repairStep++; this.repairT = 0; audio.clipIn(); if (this.repairStep >= this.repairSteps.length) { this.repaired = true; this.state = 'platform'; this.tower.setRepaired(); audio.powerUp(); this.emit('repaired'); this.say('rDone', 4); } }

@@ -88,7 +88,7 @@ export class Tower {
     const mastH = 9; const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, mastH, 8), steel); mast.position.set(0, H + mastH / 2, 0); this.group.add(mast);
     const panel = new THREE.BoxGeometry(0.3, 2.2, 0.12); for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; const pm = new THREE.Mesh(panel, new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.6 })); pm.position.set(Math.cos(a) * 0.55, H + 6, Math.sin(a) * 0.55); pm.rotation.y = -a + Math.PI / 2; this.group.add(pm); }
     const dishGeo = new THREE.CylinderGeometry(1.1, 0.7, 0.35, 16); const dishMat = new THREE.MeshStandardMaterial({ color: 0xdadfe4, roughness: 0.5 });
-    for (const dy of spec.dishes) { const d = new THREE.Mesh(dishGeo, dishMat); d.rotation.x = Math.PI / 2; d.position.set(-hw(dy) - 0.7, dy, -0.2); d.rotation.z = 0.3; this.group.add(d); const arm = new THREE.Mesh(box, steelDark); arm.position.set(-hw(dy) - 0.3, dy, -0.2); arm.scale.set(0.8, 0.1, 0.1); this.group.add(arm); }
+    for (const dy of spec.dishes) { const d = new THREE.Mesh(dishGeo, dishMat); d.rotation.z = Math.PI / 2 - 0.25; d.position.set(-hw(dy) - 0.9, dy, -0.2); this.group.add(d); const arm = new THREE.Mesh(box, steelDark); arm.position.set(-hw(dy) - 0.3, dy, -0.2); arm.scale.set(0.8, 0.1, 0.1); this.group.add(arm); }
     // beacon and obstruction lights
     this.beacon = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3020 })); this.beacon.position.set(0, H + mastH + 0.2, 0); this.group.add(this.beacon);
     this.beaconLight = new THREE.PointLight(0xff3020, 0, 60, 1.5); this.beaconLight.position.copy(this.beacon.position); this.group.add(this.beaconLight);

@@ -36,7 +36,7 @@ class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.0;
     setLang(save.lang);
-    this.input = new Input(canvas);
+    this.input = new Input(canvas); if (this.input.isTouch) ui.classList.add('touch');
     this.sky = new Sky(this.scene); this.weather = new Weather(this.scene, this.sky); this.terrain = new Terrain(this.scene); this.birds = new Birds(this.scene);
     this.van = makeVan(); this.van.position.copy(VAN_POS); this.van.rotation.y = Math.PI + 0.35; this.scene.add(this.van);
     this.hud = new Hud(ui); this.touch = new Touch(ui, this.input, canvas);
