@@ -143,7 +143,7 @@ if (touch) {
   for (let i = 0; i < 8; i++) await ev(() => { window.SIGNAL.cycle(1, true); window.SIGNAL.sim(0.15); }); // pitch up, reach mode down
   const y2 = await ev(() => window.SIGNAL.climber.pos.y); assert(y2 < y1 - 1.0, `▼ auto-reach descends while looking up (${y1.toFixed(1)} → ${y2.toFixed(1)})`);
   assert((await ev(() => document.querySelector('.tbtn.dir').textContent)) === '▼', 'direction button shows ▼');
-  await ev(() => window.SIGNAL.game.touch.setLefty(true)); await snap('touch-lefty'); await ev(() => window.SIGNAL.game.touch.setLefty(false));
+  await ev(() => { window.SIGNAL.save.leftHanded = true; window.SIGNAL.game.applySettings(); }); await snap('touch-lefty'); await ev(() => { window.SIGNAL.save.leftHanded = false; window.SIGNAL.game.applySettings(); });
 }
 await browser.close(); server.close();
 if (errors.length) { console.log('ERRORS:\n' + errors.join('\n')); process.exit(1); }
