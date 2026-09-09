@@ -6,6 +6,7 @@ const D: Dict = {
   continue: ['Continue', 'Continuar'], towers: ['Towers', 'Torres'], gallery: ['Gallery', 'Galería'], settings: ['Settings', 'Ajustes'], back: ['Back', 'Volver'],
   tagline: ['Restore the network. One antenna at a time.', 'Restaura la red. Una antena a la vez.'],
   credits: ['Credits', 'Créditos'], language: ['Language', 'Idioma'], invertY: ['Invert look Y', 'Invertir eje Y'], sound: ['Sound', 'Sonido'], on: ['On', 'Sí'], off: ['Off', 'No'],
+  fov: ['Field of view', 'Campo de visión'], reduceMotion: ['Reduce motion', 'Reducir movimiento'], leftHanded: ['Left-handed touch layout', 'Controles táctiles para zurdos'],
   resetSave: ['Reset progress', 'Borrar progreso'], resetConfirm: ['Erase all progress and photos?', '¿Borrar todo el progreso y las fotos?'],
   noPhotos: ['No photos yet. Bring the camera and press C on the tower.', 'Aún no hay fotos. Lleva la cámara y pulsa C en la torre.'],
   locked: ['Locked', 'Bloqueada'], restored: ['Restored', 'Restaurada'], climb: ['Climb', 'Escalar'], height: ['Height', 'Altura'], best: ['Best time', 'Mejor tiempo'],

@@ -70,6 +70,9 @@ export class Menus {
     tog(t('invertY'), save.invertY ? t('on') : t('off'), () => { save.invertY = !save.invertY; });
     tog(t('sound'), save.sound ? t('on') : t('off'), () => { save.sound = !save.sound; });
     tog(pick('Look sensitivity', 'Sensibilidad'), `${save.sens.toFixed(1)}×`, () => { save.sens = save.sens >= 2 ? 0.5 : +(save.sens + 0.25).toFixed(2); });
+    tog(t('fov'), `${save.fov}°`, () => { save.fov = save.fov >= 100 ? 60 : save.fov + 5; });
+    tog(t('reduceMotion'), save.reduceMotion ? t('on') : t('off'), () => { save.reduceMotion = !save.reduceMotion; });
+    tog(t('leftHanded'), save.leftHanded ? t('on') : t('off'), () => { save.leftHanded = !save.leftHanded; });
     m.appendChild(this.btn(t('resetSave'), () => { if (confirm(t('resetConfirm'))) { this.cb.onReset(); this.show('van'); } }, '', '⚠'));
     m.appendChild(h(`<div class="controls">${t('controls')}</div>`));
     m.appendChild(this.btn(t('back'), () => this.show('van'), 'small'));

@@ -18,7 +18,7 @@ export class Input {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
-    addEventListener('keydown', (e) => { if (e.repeat) return; this.keys.add(e.code); const a = keyMap[e.code]; if (a) this.press(a); if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault(); });
+    addEventListener('keydown', (e) => { if (e.repeat) return; this.keys.add(e.code); const a = keyMap[e.code]; if (a) this.press(a); if (['Space', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.code)) e.preventDefault(); });
     addEventListener('keyup', (e) => { this.keys.delete(e.code); const a = keyMap[e.code]; if (a) this.release(a); });
     addEventListener('blur', () => { this.keys.clear(); for (const a of [...this.held]) this.release(a); });
     canvas.addEventListener('mousedown', (e) => { if (!this.pointerLocked) return; if (e.button === 0) this.press('gripL'); if (e.button === 2) this.press('gripR'); });

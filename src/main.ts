@@ -57,7 +57,12 @@ class Game {
     if (this.input.isTouch) { const b = document.createElement('div'); b.className = 'tbtn sm'; b.textContent = '≡'; b.style.cssText = 'top: max(14px, env(safe-area-inset-top)); left: 50%; margin-left: -32px; width: 64px; height: 44px; border-radius: 12px;'; b.addEventListener('pointerdown', (e) => { e.preventDefault(); if (this.mode === 'climb' && !this.paused) this.pause(); }); this.touch.root.appendChild(b); }
   }
   resize() { const w = innerWidth, h = innerHeight; this.renderer.setSize(w, h, false); this.menuCam.aspect = w / h; this.menuCam.updateProjectionMatrix(); if (this.climber) { this.climber.camera.aspect = w / h; this.climber.camera.updateProjectionMatrix(); } }
-  applySettings() { setLang(save.lang); audio.setEnabled(save.sound); this.hud.relabel(); this.touch.relabel(); if (this.menus.screen !== 'none') this.menus.show(this.menus.screen); }
+  applySettings() {
+    setLang(save.lang); audio.setEnabled(save.sound); this.hud.relabel(); this.touch.relabel();
+    this.touch.setLefty(save.leftHanded); document.getElementById('ui')!.classList.toggle('lefty', save.leftHanded);
+    if (this.climber) this.climber.setComfort(save.fov, save.reduceMotion);
+    if (this.menus.screen !== 'none') this.menus.show(this.menus.screen);
+  }
 
   loadTower(spec: TowerSpec) {
     if (this.tower) this.scene.remove(this.tower.group); if (this.climber) this.climber.dispose();
@@ -69,7 +74,7 @@ class Game {
   startClimb(id: string) {
     const spec = towerById(id); this.loadTower(spec); this.tower.repaired = false;
     const L = save.loadout; this.climber.setPerks({ gloves: L.includes('gloves'), longLeash: L.includes('carabiner'), rations: L.includes('rations'), analyzer: L.includes('analyzer'), tools: L.includes('tools'), battery: L.includes('battery'), camera: L.includes('camera'), drone: L.includes('drone'), wradio: L.includes('wradio'), weight: packWeight(L) });
-    this.climber.reachDir = this.input.isTouch ? 1 : 0;
+    this.climber.reachDir = this.input.isTouch ? 1 : 0; this.climber.setComfort(save.fov, save.reduceMotion);
     this.mode = 'climb'; this.paused = false; this.menus.show('none'); this.hud.show(true); this.touch.show(this.input.isTouch); this.hud.hideRadio();
     this.storyQueue = []; this.storyFired.clear(); this.lineT = 0; this.fadeT = 1; this.hud.fade(1); this.deadShown = false; this.litAnim = -1;
     audio.music(false); this.fireStory('start');

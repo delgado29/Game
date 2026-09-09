@@ -63,7 +63,7 @@
 .clip.on { color: var(--ok); } .clip.off { color: var(--danger); } .clip.on.warn { color: #ffb347; }
 .clip small { display: block; letter-spacing: 0.05em; font-weight: 500; color: var(--dim); font-size: 11px; }
 .obj { position: absolute; top: calc(max(16px, env(safe-area-inset-top)) + 46px); right: max(20px, env(safe-area-inset-right)); font-size: 13px; color: var(--dim); text-align: right; }
-.prompt { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); background: rgba(0,0,0,0.5); padding: 8px 14px; border-radius: 8px; font-size: 15px; white-space: nowrap; border: 1px solid var(--line); }
+.prompt { position: absolute; left: 50%; bottom: 31%; transform: translateX(-50%); background: rgba(0,0,0,0.5); padding: 8px 14px; border-radius: 8px; font-size: 15px; white-space: nowrap; border: 1px solid var(--line); }
 .msg { position: absolute; left: 50%; top: 34%; transform: translateX(-50%); font-size: 22px; font-weight: 800; letter-spacing: 0.06em; text-shadow: 0 2px 20px rgba(0,0,0,0.8); text-align: center; }
 .brace { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); color: var(--danger); font-weight: 900; font-size: 26px; letter-spacing: 0.14em; animation: pulse .5s infinite alternate; text-shadow: 0 0 20px rgba(255,74,58,0.7); }
 @keyframes pulse { from { opacity: .6 } to { opacity: 1 } }
@@ -100,6 +100,7 @@
 .stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px; border-radius: 50%; background: rgba(255,255,255,0.3); }
 /* touch layout: keep subtitles and prompts clear of the thumb buttons */
 .touch .radio { bottom: 215px; width: min(520px, 56vw); }
-.touch .prompt { bottom: 44%; }
+.touch .prompt { bottom: 50%; }
+.touch.lefty .meters { left: auto; right: max(20px, env(safe-area-inset-right)); }
 .touch .msg { top: 28%; }
 .touch .meters { width: 130px; }

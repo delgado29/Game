@@ -33,6 +33,9 @@ export class Climber {
   descending = false;
   prompt = ''; message = ''; messageT = 0; brace = false; slipping = false;
   arcWarn = 0;            // 0 no live box near, (0,1) warning ramp, 1 arcing within reach
+  /** Comfort settings: base field of view and a motion scale (0.3 with reduce-motion on). */
+  comfort = { fov: 72, motion: 1 };
+  setComfort(fov: number, reduceMotion: boolean) { this.comfort = { fov, motion: reduceMotion ? 0.3 : 1 }; }
   /** Touch reach mode: 1 grabs upward from the other hand, -1 downward, 0 aims with the camera pitch (desktop). */
   reachDir: 1 | -1 | 0 = 0;
   shake = 0; flashRed = 0; deadT = 0;
@@ -265,15 +268,16 @@ export class Climber {
       const a = this.time * 0.25; const r = 3.2 + Math.sin(this.time * 0.13) * 0.6; const target = this.figure.position.clone().add(new THREE.Vector3(0, 0.7, 0));
       cam.position.set(target.x + Math.cos(a) * r, target.y + 0.9 + Math.sin(this.time * 0.2) * 0.4, target.z + Math.sin(a) * r); cam.lookAt(target); cam.rotation.z = 0; return;
     }
-    const swayX = (Math.sin(this.time * 1.7) * 0.03 + Math.sin(this.time * 4.3) * 0.012) * wind * hf + w.gust * 0.09 * Math.sin(this.time * 6.1) * hf;
-    const swayY = Math.sin(this.time * 2.3) * 0.015 * wind * hf + (this.onLadder ? Math.sin(this.time * 2.0) * 0.01 : 0);
-    const tremble = this.slipping ? 0.012 : 0; const sh = this.shake * 0.08;
+    const m = this.comfort.motion;
+    const swayX = ((Math.sin(this.time * 1.7) * 0.03 + Math.sin(this.time * 4.3) * 0.012) * wind * hf + w.gust * 0.09 * Math.sin(this.time * 6.1) * hf) * m;
+    const swayY = (Math.sin(this.time * 2.3) * 0.015 * wind * hf + (this.onLadder ? Math.sin(this.time * 2.0) * 0.01 : 0)) * m;
+    const tremble = (this.slipping ? 0.012 : 0) * m; const sh = this.shake * 0.08 * m;
     const eye = this.state === 'dead' ? 0.4 : EYE;
-    const dip = -0.07 * this.pullBob; // pull-up: the head dips as the arms take the load, then rises
+    const dip = -0.07 * this.pullBob * m; // pull-up: the head dips as the arms take the load, then rises
     cam.position.set(this.pos.x + swayX + (Math.random() - 0.5) * (tremble + sh), this.pos.y + eye + swayY + dip + (Math.random() - 0.5) * (tremble + sh), this.pos.z + (Math.random() - 0.5) * sh);
-    const roll = -swayX * 0.6 + (this.state === 'dead' ? 0.6 : 0) + (Math.random() - 0.5) * sh * 0.5;
+    const roll = (m < 1 ? 0 : -swayX * 0.6 + (Math.random() - 0.5) * sh * 0.5) + (this.state === 'dead' ? 0.6 : 0);
     cam.rotation.set(0, 0, 0); cam.rotation.order = 'YXZ'; cam.rotation.y = this.yaw; cam.rotation.x = (this.state === 'dead' ? -0.5 : this.pitch) - this.pullBob * 0.04; cam.rotation.z = roll;
-    cam.fov = damp(cam.fov, this.state === 'falling' ? 84 : 72, 4, dt); cam.updateProjectionMatrix();
+    cam.fov = damp(cam.fov, this.comfort.fov + (this.state === 'falling' ? 12 : 0), 4, dt); cam.updateProjectionMatrix();
   }
   private updateHands(dt: number) {
     const T = this.tower; const cam = this.camera; const show = this.state !== 'rest' && this.state !== 'dead';

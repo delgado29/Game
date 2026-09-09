@@ -102,8 +102,13 @@ assert(st.mode === 'debrief' && st.done && st.unlocked.includes('blackridge'), `
 await page.reload(); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await page.waitForTimeout(500);
 st = await ev(() => ({ done: !!window.SIGNAL.save.completed.pinegrove, photos: window.SIGNAL.save.photos.length, lit: window.SIGNAL.game.terrain.litApplied })); assert(st.done && st.photos === 1, 'progress persisted across reload');
 await page.getByRole('button', { name: /Gallery|Galería/ }).click(); await snap('gallery'); await page.getByRole('button', { name: /Back|Volver/ }).click();
+// comfort settings persist and reach the climber camera
+await page.getByRole('button', { name: /Settings|Ajustes/ }).click(); await page.getByRole('button', { name: /Field of view|Campo de visión/ }).click(); await page.getByRole('button', { name: /Reduce motion|Reducir movimiento/ }).click(); await snap('settings');
+await page.reload(); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await page.waitForTimeout(400);
+st = await ev(() => ({ fov: window.SIGNAL.save.fov, rm: window.SIGNAL.save.reduceMotion })); assert(st.fov === 77 && st.rm === true, `settings persisted (fov=${st.fov}, reduceMotion=${st.rm})`);
 // Black Ridge: sabotage probes
 await ev(() => { const s = window.SIGNAL.save; s.loadout = ['harness', 'tools', 'battery', 'drone']; window.SIGNAL.start('blackridge'); }); await page.waitForTimeout(400); await ev(() => { window.SIGNAL.game.paused = false; window.SIGNAL.screen('none'); }); await step(10);
+st = await ev(() => window.SIGNAL.climber.comfort); assert(st.fov === 77 && st.motion < 1, `climber uses comfort settings (${JSON.stringify(st)})`);
 st = await ev(() => ({ anchors: window.SIGNAL.tower.anchors.length, broken: window.SIGNAL.tower.broken.size, cuts: window.SIGNAL.tower.spec.cutAnchors })); console.log('blackridge:', JSON.stringify(st));
 assert(!(await ev(() => window.SIGNAL.tower.anchors.some((a) => a > 78 && a < 92))), 'no anchors inside the cut range');
 await ev(() => { window.SIGNAL.calm(); window.SIGNAL.teleport(76); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.6; }); await step(3); await ev(() => window.SIGNAL.clip());
