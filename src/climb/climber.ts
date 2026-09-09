@@ -7,6 +7,7 @@ import { RUNG_STEP } from '../world/tower';
 import type { Weather } from '../world/weather';
 import { makeHand, makeClimberFigure } from '../world/props';
 import { t } from '../core/i18n';
+import { haptic } from '../core/haptics';
 
 export type ClimbState = 'ground' | 'platform' | 'ladder' | 'falling' | 'dead' | 'rest' | 'repair';
 export type ClimbEvent = 'clipped' | 'firstPlatform' | 'stepOnTop' | 'repaired' | 'repairFailed' | 'landed' | 'fell' | 'caught' | 'cut' | 'photo' | 'enterVan' | 'message';
@@ -32,6 +33,8 @@ export class Climber {
   descending = false;
   prompt = ''; message = ''; messageT = 0; brace = false; slipping = false;
   arcWarn = 0;            // 0 no live box near, (0,1) warning ramp, 1 arcing within reach
+  /** Touch reach mode: 1 grabs upward from the other hand, -1 downward, 0 aims with the camera pitch (desktop). */
+  reachDir: 1 | -1 | 0 = 0;
   shake = 0; flashRed = 0; deadT = 0;
   pullBob = 0;            // 1 right after a pull-up, decays; drives the camera dip
   private pullRate = 7;   // how fast the body follows the hands (slower with a heavy pack)
@@ -137,7 +140,7 @@ export class Climber {
       const h = this.hands[hi];
       if (inp.pressed.has(act)) this.tryGrab(hi);
       if (inp.released.has(act) && h.rung !== null) { h.rung = null; audio.releaseHand(); }
-      if (h.rung !== null && T.broken.has(h.rung) && !T.snapped.has(h.rung)) { h.snapT += dt; if (h.snapT > 0.35) { T.snapRung(h.rung); h.rung = null; h.snapT = 0; audio.snap(); this.say('rungSnap'); this.stamina -= 8; this.shake = 0.6; } } else h.snapT = 0;
+      if (h.rung !== null && T.broken.has(h.rung) && !T.snapped.has(h.rung)) { h.snapT += dt; if (h.snapT > 0.35) { T.snapRung(h.rung); h.rung = null; h.snapT = 0; audio.snap(); haptic(50); this.say('rungSnap'); this.stamina -= 8; this.shake = 0.6; } } else h.snapT = 0;
     }
     // clip
     if (inp.pressed.has('clip')) this.tryClip();
@@ -155,10 +158,10 @@ export class Climber {
     this.pos.x = damp(this.pos.x, 0, 8, dt); this.pos.z = damp(this.pos.z, T.ladderZ(this.pos.y) + 0.55, 8, dt);
     // gust: one hand in a strong gust slips
     const g = this.weather.gust; this.brace = (this.weather.gustWarning || g > 0.45) && this.pos.y > 8;
-    if (g > 0.6 && held.length === 1) { this.slipT += dt; if (this.slipT > 0.6 && Math.random() < dt * 1.6) { held[0].rung = null; audio.slip(); this.say('slipping', 1.2); this.slipT = 0; } } else this.slipT = Math.max(0, this.slipT - dt);
+    if (g > 0.6 && held.length === 1) { this.slipT += dt; if (this.slipT > 0.6 && Math.random() < dt * 1.6) { held[0].rung = null; audio.slip(); haptic([40, 30, 40]); this.say('slipping', 1.2); this.slipT = 0; } } else this.slipT = Math.max(0, this.slipT - dt);
     // electrical boxes: HUD warning within 3 m, shock within reach while arcing
     this.arcWarn = T.electrical.reduce((m, e, i) => Math.abs(this.chest - e.y) < 3 ? Math.max(m, T.arcPhase(i)) : m, 0);
-    T.electrical.forEach((e, i) => { if (Math.abs(this.chest - e.y) < 1.15 && T.arcAt(i) && held.length) { for (const h of this.hands) h.rung = null; audio.shock(); this.say('shocked', 1.5); this.stamina -= 18; this.shake = 1; this.flashRed = 1; } });
+    T.electrical.forEach((e, i) => { if (Math.abs(this.chest - e.y) < 1.15 && T.arcAt(i) && held.length) { for (const h of this.hands) h.rung = null; audio.shock(); haptic([30, 30, 30, 30, 30]); this.say('shocked', 1.5); this.stamina -= 18; this.shake = 1; this.flashRed = 1; } });
     // platform step-off
     const pi = T.platforms.findIndex((p) => Math.abs(this.pos.y - p.y) < 0.75);
     if (pi >= 0) { this.prompt = t('stepOff'); if (inp.pressed.has('act')) this.stepOnto(pi); }
@@ -169,13 +172,15 @@ export class Climber {
   }
   private tryGrab(hi: 0 | 1) {
     const T = this.tower; const h = this.hands[hi]; if (h.rung !== null) return;
-    const reachY = this.pos.y + CHEST + HAND_REST + clamp(this.pitch / 1.1, -1, 1) * 0.9;
+    const rest = this.pos.y + CHEST + HAND_REST; let reachY: number;
+    if (this.reachDir !== 0) { const o = this.hands[1 - hi].rung; const base = o !== null ? T.rungY[o] : rest; reachY = clamp(base + this.reachDir * (o !== null ? 2 * RUNG_STEP : 0.6), rest - 1.1, rest + 1.1); }
+    else reachY = rest + clamp(this.pitch / 1.1, -1, 1) * 0.9;
     const i = T.rungAt(reachY); if (T.snapped.has(i)) { audio.releaseHand(); return; }
     const y = T.rungY[i]; if (Math.abs(y - (this.pos.y + CHEST + HAND_REST)) > 1.15) return;
     // leash: refuse a grab that would drag the body past the rope
     const other = this.hands[1 - hi].rung; const meanY = other === null ? y : (y + T.rungY[other]) / 2; const target = meanY - CHEST - HAND_REST;
     if (this.clampLeash(target) !== target && Math.abs(this.clampLeash(target) - target) > 0.05) { this.say('reclip', 1.2); this.shake = Math.max(this.shake, 0.35); audio.ropeCreak(); return; }
-    h.rung = i; h.snapT = 0; audio.grab();
+    h.rung = i; h.snapT = 0; audio.grab(); haptic(10);
     if (this.state === 'ladder' && target > this.pos.y + 0.12) { this.pullBob = other === null ? 1 : 0.6; audio.pull(clamp(this.perks.weight / 9, 0, 1)); }
     if (this.state === 'falling' && this.vel < 4.5) { this.state = 'ladder'; this.stamina -= 22; this.shake = 0.5; this.vel = 0; }
   }
@@ -190,7 +195,7 @@ export class Climber {
     const n = this.nearestAnchor();
     if (n === null) { this.say('noAnchor', 1.6); audio.releaseHand(); const inCut = this.tower.spec.cutAnchors.some(([a, b]) => this.chest > a - 1 && this.chest < b + 1); if (inCut && !this.cutWarned) { this.cutWarned = true; this.emit('cut'); } return; }
     if (n === this.anchor) return;
-    const first = this.anchor === null; this.anchor = n; audio.clipIn(); if (first) this.emit('clipped');
+    const first = this.anchor === null; this.anchor = n; audio.clipIn(); haptic(20); if (first) this.emit('clipped');
   }
   private stepOnto(pi: number) {
     const p = this.tower.platforms[pi]; this.state = 'platform'; this.lastPlatform = pi; this.pos.set(0, p.y, p.hw + 0.55); for (const h of this.hands) h.rung = null; this.anchor = null; this.stepT = 0;
@@ -203,11 +208,11 @@ export class Climber {
     for (const [hi, act] of [[0, 'gripL'], [1, 'gripR']] as const) if (this.input.pressed.has(act)) this.tryGrab(hi);
     if (this.state !== 'falling') return;
     const ay = this.anchorY;
-    if (ay !== null && this.chest <= ay - this.leash) { this.pos.y = ay - this.leash - CHEST; this.state = 'ladder'; this.vel = 0; this.falls++; this.stamina -= 22; this.shake = 1.4; audio.jerk(); this.say('caught', 2); this.emit('caught'); return; }
+    if (ay !== null && this.chest <= ay - this.leash) { this.pos.y = ay - this.leash - CHEST; this.state = 'ladder'; this.vel = 0; this.falls++; this.stamina -= 22; this.shake = 1.4; audio.jerk(); haptic(80); this.say('caught', 2); this.emit('caught'); return; }
     if (this.pos.y <= 0) { this.pos.y = 0; if (this.vel < 8) this.stumble(); else this.die(); }
   }
   /** A short drop onto the ground: bruised, not dead. */
-  private stumble() { this.state = 'ground'; this.pos.z += 0.6; this.falls++; this.stamina = Math.max(0, this.stamina - 30); this.shake = 1.2; this.flashRed = 0.6; this.anchor = null; this.vel = 0; for (const h of this.hands) h.rung = null; audio.jerk(); this.say('stumble', 2); }
+  private stumble() { this.state = 'ground'; this.pos.z += 0.6; this.falls++; this.stamina = Math.max(0, this.stamina - 30); this.shake = 1.2; this.flashRed = 0.6; this.anchor = null; this.vel = 0; for (const h of this.hands) h.rung = null; audio.jerk(); haptic(60); this.say('stumble', 2); }
   private die() { this.state = 'dead'; this.deadT = 0; this.falls++; audio.jerk(); this.emit('fell'); for (const h of this.hands) h.rung = null; }
   respawn() {
     if (this.lastPlatform >= 0) { const p = this.tower.platforms[this.lastPlatform]; this.state = 'platform'; this.pos.set(0, p.y, p.hw + 0.55); this.yaw = 0; }

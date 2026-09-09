@@ -95,6 +95,7 @@
 .tbtn.grip { border-color: var(--signal); }
 .tbtn.grip.act { background: rgba(127,227,255,0.35); }
 .tbtn.sm { width: 64px; height: 64px; font-size: 11px; }
+.tbtn.dir { color: var(--signal); border-color: var(--signal); font-size: 18px; } .tbtn.dir.down { color: var(--accent); border-color: var(--accent); }
 .stick { position: absolute; left: max(24px, env(safe-area-inset-left)); bottom: max(120px, calc(env(safe-area-inset-bottom) + 110px)); width: 130px; height: 130px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); pointer-events: auto; touch-action: none; }
 .stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px; border-radius: 50%; background: rgba(255,255,255,0.3); }
 /* touch layout: keep subtitles and prompts clear of the thumb buttons */

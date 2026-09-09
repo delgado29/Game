@@ -128,7 +128,18 @@ assert(warned, 'arc warning shows on the HUD before the box arcs'); await snap('
 await ev(() => { window.SIGNAL.teleport(150); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = -0.6; }); await step(30); await snap('blackridge-150m');
 st = await ev(() => window.SIGNAL.game.storyQueue?.length ?? -1); console.log('story queue', st);
 const perf = await ev(async () => { const t0 = performance.now(); let f = 0; await new Promise((res) => { const s = () => { f++; if (performance.now() - t0 > 2000) res(); else requestAnimationFrame(s); }; requestAnimationFrame(s); }); return { fps: Math.round(f / 2) }; }); console.log('perf (swiftshader):', JSON.stringify(perf));
-if (touch) { await ev(() => { window.SIGNAL.teleport(20); }); await step(5); await snap('touch-controls'); }
+if (touch) {
+  await ev(() => { window.SIGNAL.calm(); window.SIGNAL.teleport(20); }); await step(5); await snap('touch-controls');
+  // auto-reach: with ▲ the grabs go up even while looking down, with ▼ they go down while looking up
+  let y0 = await ev(() => { const c = window.SIGNAL.climber; c.reachDir = 1; c.anchor = null; return c.pos.y; });
+  for (let i = 0; i < 8; i++) await ev(() => { window.SIGNAL.cycle(1, false); window.SIGNAL.sim(0.15); }); // pitch down, reach mode up
+  let y1 = await ev(() => window.SIGNAL.climber.pos.y); assert(y1 > y0 + 1.0, `▲ auto-reach climbs while looking down (${y0.toFixed(1)} → ${y1.toFixed(1)})`);
+  await ev(() => { window.SIGNAL.climber.reachDir = -1; window.SIGNAL.game.touch.refreshDir(); });
+  for (let i = 0; i < 8; i++) await ev(() => { window.SIGNAL.cycle(1, true); window.SIGNAL.sim(0.15); }); // pitch up, reach mode down
+  const y2 = await ev(() => window.SIGNAL.climber.pos.y); assert(y2 < y1 - 1.0, `▼ auto-reach descends while looking up (${y1.toFixed(1)} → ${y2.toFixed(1)})`);
+  assert((await ev(() => document.querySelector('.tbtn.dir').textContent)) === '▼', 'direction button shows ▼');
+  await ev(() => window.SIGNAL.game.touch.setLefty(true)); await snap('touch-lefty'); await ev(() => window.SIGNAL.game.touch.setLefty(false));
+}
 await browser.close(); server.close();
 if (errors.length) { console.log('ERRORS:\n' + errors.join('\n')); process.exit(1); }
 console.log('smoke ok, screenshots in', outDir);

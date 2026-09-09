@@ -40,6 +40,7 @@ class Game {
     this.sky = new Sky(this.scene); this.weather = new Weather(this.scene, this.sky); this.terrain = new Terrain(this.scene); this.birds = new Birds(this.scene);
     this.van = makeVan(); this.van.position.copy(VAN_POS); this.van.rotation.y = Math.PI + 0.35; this.scene.add(this.van);
     this.hud = new Hud(ui); this.touch = new Touch(ui, this.input, canvas);
+    this.touch.bindDir(() => this.climber ? this.climber.reachDir : 1, () => { if (this.climber && this.climber.reachDir !== 0) this.climber.reachDir = this.climber.reachDir > 0 ? -1 : 1; });
     this.menus = new Menus(ui, {
       onStart: (id) => this.startClimb(id), onSetting: () => this.applySettings(), onReset: () => { resetSave(); this.applySettings(); this.loadTower(TOWERS[0]); },
       onResume: () => this.resume(), onAbandon: () => this.endClimb(false), onRespawn: () => { this.climber.respawn(); this.deadShown = false; this.menus.show('none'); this.resume(); },
@@ -68,6 +69,7 @@ class Game {
   startClimb(id: string) {
     const spec = towerById(id); this.loadTower(spec); this.tower.repaired = false;
     const L = save.loadout; this.climber.setPerks({ gloves: L.includes('gloves'), longLeash: L.includes('carabiner'), rations: L.includes('rations'), analyzer: L.includes('analyzer'), tools: L.includes('tools'), battery: L.includes('battery'), camera: L.includes('camera'), drone: L.includes('drone'), wradio: L.includes('wradio'), weight: packWeight(L) });
+    this.climber.reachDir = this.input.isTouch ? 1 : 0;
     this.mode = 'climb'; this.paused = false; this.menus.show('none'); this.hud.show(true); this.touch.show(this.input.isTouch); this.hud.hideRadio();
     this.storyQueue = []; this.storyFired.clear(); this.lineT = 0; this.fadeT = 1; this.hud.fade(1); this.deadShown = false; this.litAnim = -1;
     audio.music(false); this.fireStory('start');
@@ -94,7 +96,7 @@ class Game {
       case 'firstPlatform': this.fireStory('firstPlatform'); break;
       case 'stepOnTop': this.fireStory('stepOnTop'); break;
       case 'cut': this.fireStory('cut'); break;
-      case 'repaired': this.weather.event('repaired'); this.fireStory('repaired'); this.climber.descending = true; if (this.terrain.lit < 1) this.litAnim = 0; break;
+      case 'repaired': this.weather.event('repaired'); this.fireStory('repaired'); this.climber.descending = true; if (this.climber.reachDir !== 0) { this.climber.reachDir = -1; this.touch.refreshDir(); } if (this.terrain.lit < 1) this.litAnim = 0; break;
       case 'repairFailed': break;
       case 'landed': this.fireStory('landed'); break;
       case 'enterVan': this.endClimb(true); break;
