@@ -25,7 +25,8 @@ const D: Dict = {
   needBattery: ['Dead cells. You need a battery pack for this one.', 'Celdas muertas. Necesitas una batería para esta.'],
   needTools: ['You left the repair tools in the van.', 'Dejaste las herramientas en la furgoneta.'],
   fell: ['You fell.', 'Caíste.'], caught: ['The harness caught you.', 'El arnés te sujetó.'], shocked: ['SHOCK', 'DESCARGA'], rungSnap: ['The rung snapped!', '¡El peldaño se rompió!'],
-  slipping: ['Hands slipping', 'Se resbalan las manos'], retry: ['Back to the last platform', 'Volver a la última plataforma'],
+  slipping: ['Hands slipping', 'Se resbalan las manos'], stumble: ['You stumbled.', 'Tropezaste.'],
+  twoHands: ['BOTH HANDS!', '¡LAS DOS MANOS!'], arcWarn: ['LIVE BOX — wait for the arc', 'CAJA CON CORRIENTE — espera el arco'], arcNow: ['ARCING', 'ARCO'], retry: ['Back to the last platform', 'Volver a la última plataforma'],
   photoSaved: ['Photo saved', 'Foto guardada'], descend: ['Get back down to the van', 'Vuelve a bajar a la furgoneta'],
   objTop: ['Reach the transmitter', 'Llega al transmisor'], objVan: ['Return to the van', 'Vuelve a la furgoneta'],
   // debrief

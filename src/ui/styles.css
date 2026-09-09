@@ -67,6 +67,11 @@
 .msg { position: absolute; left: 50%; top: 34%; transform: translateX(-50%); font-size: 22px; font-weight: 800; letter-spacing: 0.06em; text-shadow: 0 2px 20px rgba(0,0,0,0.8); text-align: center; }
 .brace { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); color: var(--danger); font-weight: 900; font-size: 26px; letter-spacing: 0.14em; animation: pulse .5s infinite alternate; text-shadow: 0 0 20px rgba(255,74,58,0.7); }
 @keyframes pulse { from { opacity: .6 } to { opacity: 1 } }
+.brace .bar, .hazard .bar { height: 6px; margin-top: 6px; background: rgba(0,0,0,0.45); width: 220px; margin-left: auto; margin-right: auto; }
+.brace .bar > i { background: var(--danger); }
+.hazard { position: absolute; left: 50%; top: 14%; transform: translateX(-50%); color: #ffd400; font-weight: 800; font-size: 16px; letter-spacing: 0.1em; text-align: center; text-shadow: 0 0 14px rgba(255,212,0,0.6); }
+.hazard .bar > i { background: #ffd400; }
+.hazard.on { color: var(--danger); animation: pulse .12s infinite alternate; } .hazard.on .bar > i { background: var(--danger); }
 .radio { position: absolute; left: 50%; bottom: max(80px, calc(env(safe-area-inset-bottom) + 70px)); transform: translateX(-50%); width: min(640px, 90vw); background: rgba(6,9,15,0.75); border-left: 3px solid var(--signal); padding: 10px 14px; border-radius: 6px; font-size: 15px; }
 .radio .who { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--signal); margin-bottom: 2px; }
 .radio.unknown { border-left-color: var(--danger); } .radio.unknown .who { color: var(--danger); }

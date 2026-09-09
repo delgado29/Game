@@ -31,6 +31,7 @@ export class Climber {
   lastPlatform = -1;  // index of last platform reached (checkpoint)
   descending = false;
   prompt = ''; message = ''; messageT = 0; brace = false; slipping = false;
+  arcWarn = 0;            // 0 no live box near, (0,1) warning ramp, 1 arcing within reach
   shake = 0; flashRed = 0; deadT = 0;
   pullBob = 0;            // 1 right after a pull-up, decays; drives the camera dip
   private pullRate = 7;   // how fast the body follows the hands (slower with a heavy pack)
@@ -82,7 +83,7 @@ export class Climber {
     if (this.state !== 'rest' && this.state !== 'dead') this.handleLook(dt, invertY, sens);
     if (this.messageT > 0) { this.messageT -= dt; if (this.messageT <= 0) this.message = ''; }
     this.shake = damp(this.shake, 0, 6, dt); this.flashRed = damp(this.flashRed, 0, 5, dt); this.pullBob = damp(this.pullBob, 0, 4.5, dt);
-    this.prompt = '';
+    this.prompt = ''; this.arcWarn = 0;
     switch (this.state) {
       case 'ground': this.updateWalk(dt, true); break;
       case 'platform': this.updateWalk(dt, false); break;
@@ -155,7 +156,8 @@ export class Climber {
     // gust: one hand in a strong gust slips
     const g = this.weather.gust; this.brace = (this.weather.gustWarning || g > 0.45) && this.pos.y > 8;
     if (g > 0.6 && held.length === 1) { this.slipT += dt; if (this.slipT > 0.6 && Math.random() < dt * 1.6) { held[0].rung = null; audio.slip(); this.say('slipping', 1.2); this.slipT = 0; } } else this.slipT = Math.max(0, this.slipT - dt);
-    // electrical boxes
+    // electrical boxes: HUD warning within 3 m, shock within reach while arcing
+    this.arcWarn = T.electrical.reduce((m, e, i) => Math.abs(this.chest - e.y) < 3 ? Math.max(m, T.arcPhase(i)) : m, 0);
     T.electrical.forEach((e, i) => { if (Math.abs(this.chest - e.y) < 1.15 && T.arcAt(i) && held.length) { for (const h of this.hands) h.rung = null; audio.shock(); this.say('shocked', 1.5); this.stamina -= 18; this.shake = 1; this.flashRed = 1; } });
     // platform step-off
     const pi = T.platforms.findIndex((p) => Math.abs(this.pos.y - p.y) < 0.75);
@@ -202,8 +204,10 @@ export class Climber {
     if (this.state !== 'falling') return;
     const ay = this.anchorY;
     if (ay !== null && this.chest <= ay - this.leash) { this.pos.y = ay - this.leash - CHEST; this.state = 'ladder'; this.vel = 0; this.falls++; this.stamina -= 22; this.shake = 1.4; audio.jerk(); this.say('caught', 2); this.emit('caught'); return; }
-    if (this.pos.y <= 0) { this.pos.y = 0; this.die(); }
+    if (this.pos.y <= 0) { this.pos.y = 0; if (this.vel < 8) this.stumble(); else this.die(); }
   }
+  /** A short drop onto the ground: bruised, not dead. */
+  private stumble() { this.state = 'ground'; this.pos.z += 0.6; this.falls++; this.stamina = Math.max(0, this.stamina - 30); this.shake = 1.2; this.flashRed = 0.6; this.anchor = null; this.vel = 0; for (const h of this.hands) h.rung = null; audio.jerk(); this.say('stumble', 2); }
   private die() { this.state = 'dead'; this.deadT = 0; this.falls++; audio.jerk(); this.emit('fell'); for (const h of this.hands) h.rung = null; }
   respawn() {
     if (this.lastPlatform >= 0) { const p = this.tower.platforms[this.lastPlatform]; this.state = 'platform'; this.pos.set(0, p.y, p.hw + 0.55); this.yaw = 0; }

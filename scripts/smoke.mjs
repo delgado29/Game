@@ -118,6 +118,13 @@ st = await ev(() => ({ state: window.SIGNAL.climber.state, y: window.SIGNAL.clim
 // broken rung snaps, electrical box arcs
 await ev(() => { window.SIGNAL.teleport(50.2); const c = window.SIGNAL.climber; c.pitch = 0.5; for (const h of c.hands) h.rung = null; const i = [...c.tower.broken][0]; c.hands[0].rung = i; }); await step(40);
 st = await ev(() => ({ snapped: window.SIGNAL.tower.snapped.size, msg: window.SIGNAL.climber.message })); assert(st.snapped === 1, `broken rung snapped (${st.msg})`);
+// short unclipped drop near the ground: a stumble, not a death
+await ev(() => { window.SIGNAL.teleport(1.6); const c = window.SIGNAL.climber; c.anchor = null; for (const h of c.hands) h.rung = null; }); await step(150);
+st = await ev(() => ({ state: window.SIGNAL.climber.state, msg: window.SIGNAL.climber.message, falls: window.SIGNAL.climber.falls })); assert(st.state === 'ground', `short drop is a stumble (${st.state}, ${st.msg}, falls=${st.falls})`);
+// live junction box at 63 m: the HUD warns before the arc
+await ev(() => { window.SIGNAL.teleport(62.6); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.2; });
+let warned = false; for (let i = 0; i < 120 && !warned; i++) { await step(3); warned = await ev(() => { const S = window.SIGNAL; const p = S.tower.arcPhase(0); return p > 0.2 && p < 1 && S.climber.arcWarn > 0 && !document.querySelector('.hazard').hidden; }); }
+assert(warned, 'arc warning shows on the HUD before the box arcs'); await snap('arc-warning');
 await ev(() => { window.SIGNAL.teleport(150); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = -0.6; }); await step(30); await snap('blackridge-150m');
 st = await ev(() => window.SIGNAL.game.storyQueue?.length ?? -1); console.log('story queue', st);
 const perf = await ev(async () => { const t0 = performance.now(); let f = 0; await new Promise((res) => { const s = () => { f++; if (performance.now() - t0 > 2000) res(); else requestAnimationFrame(s); }; requestAnimationFrame(s); }); return { fps: Math.round(f / 2) }; }); console.log('perf (swiftshader):', JSON.stringify(perf));

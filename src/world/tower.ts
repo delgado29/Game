@@ -5,6 +5,7 @@ import { clamp } from '../core/math';
 
 export const RUNG_STEP = 0.3;
 export const LADDER_OFF = 0.32;   // ladder stands this far outside the +Z face
+const ARC_CYCLE = 5.5, ARC_ON = 1.0, ARC_WARN = 1.3; // junction boxes: warn for 1.3 s, then arc for 1 s, every 5.5 s
 const UP = new THREE.Vector3(0, 1, 0);
 
 export interface Platform { y: number; hw: number; }
@@ -19,7 +20,7 @@ export class Tower {
   platforms: Platform[] = [];
   topY: number;
   transmitter = new THREE.Vector3();
-  electrical: { y: number; light: THREE.PointLight; arc: THREE.Mesh; phase: number }[] = [];
+  electrical: { y: number; light: THREE.PointLight; arc: THREE.Mesh; sign: THREE.Mesh; phase: number }[] = [];
   beacon: THREE.Mesh; beaconLight: THREE.PointLight; statusLamp: THREE.Mesh;
   private rungMesh: THREE.InstancedMesh; private brokenMesh: THREE.InstancedMesh;
   private hazardMarks: THREE.InstancedMesh;
@@ -103,7 +104,7 @@ export class Tower {
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), new THREE.MeshBasicMaterial({ color: 0xffd400 })); sign.position.set(0.85, ey + 0.05, lz(ey) + 0.13); this.group.add(sign);
       const light = new THREE.PointLight(0x9ad0ff, 0, 6, 2); light.position.set(0.55, ey, lz(ey) + 0.1); this.group.add(light);
       const arc = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 4), new THREE.MeshBasicMaterial({ color: 0xcfe8ff })); arc.position.copy(light.position); arc.visible = false; this.group.add(arc);
-      this.electrical.push({ y: ey, light, arc, phase: Math.random() * 4 });
+      this.electrical.push({ y: ey, light, arc, sign, phase: Math.random() * ARC_CYCLE });
     }
     // drone hazard markers (hidden until the drone scouts)
     const markGeo = new THREE.RingGeometry(0.22, 0.3, 16); const marks: THREE.Matrix4[] = [];
@@ -119,15 +120,18 @@ export class Tower {
   /** Nearest rung index to a height. */
   rungAt(y: number) { return clamp(Math.round(y / RUNG_STEP) - 1, 0, this.rungY.length - 1); }
   snapRung(i: number) { this.snapped.add(i); this.brokenMesh.setMatrixAt([...this.broken].indexOf(i), new THREE.Matrix4().makeScale(0, 0, 0)); this.brokenMesh.instanceMatrix.needsUpdate = true; }
-  /** Electrical arc state 0..1 at a box (1 = arcing now). */
-  arcAt(i: number) { const e = this.electrical[i]; const t = (this.time + e.phase) % 4.5; return t < 1.1 ? 1 : 0; }
+  /** 1 while a box is arcing, 0 otherwise. */
+  arcAt(i: number) { return this.arcPhase(i) >= 1 ? 1 : 0; }
+  /** 0 idle, rising 0..1 during the warning buzz, 1 while arcing. */
+  arcPhase(i: number) { const e = this.electrical[i]; const t = (this.time + e.phase) % ARC_CYCLE; if (t < ARC_ON) return 1; const w = t - (ARC_CYCLE - ARC_WARN); return w > 0 ? Math.min(0.999, w / ARC_WARN) : 0; }
   setRepaired() { this.repaired = true; (this.statusLamp.material as THREE.MeshBasicMaterial).color.set(0x30ff60); }
   update(dt: number) {
     this.time += dt;
     const blink = this.repaired ? (Math.sin(this.time * 2) > 0 ? 1 : 0.2) : Math.sin(this.time * 1.5) > 0.6 ? 1 : 0;
     (this.beacon.material as THREE.MeshBasicMaterial).color.setRGB(1, 0.15 * blink, 0.1 * blink).multiplyScalar(0.4 + 0.6 * blink); this.beaconLight.intensity = blink * 40;
     (this.statusLamp.material as THREE.MeshBasicMaterial).color.copy(this.repaired ? new THREE.Color(0x30ff60) : new THREE.Color(Math.sin(this.time * 6) > 0 ? 0xff2020 : 0x300000));
-    this.electrical.forEach((e, i) => { const a = this.arcAt(i); const f = a * (Math.random() > 0.35 ? 1 : 0.2); e.light.intensity = f * 6; e.arc.visible = f > 0.5; });
+    this.electrical.forEach((e, i) => { const p = this.arcPhase(i); const arcing = p >= 1; const f = arcing ? (Math.random() > 0.35 ? 1 : 0.2) : p > 0 ? p * (Math.random() > 0.6 ? 0.35 : 0.05) : 0; e.light.intensity = f * 6; e.arc.visible = arcing && f > 0.5;
+      (e.sign.material as THREE.MeshBasicMaterial).color.set(p > 0 && !arcing && Math.sin(this.time * 40) > 0 ? 0xfff2a0 : arcing ? 0xff4040 : 0xffd400); });
   }
 }
 

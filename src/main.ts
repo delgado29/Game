@@ -150,7 +150,7 @@ class Game {
     this.sky.update(dt, camPos, this.weather.cur.rain); this.tower.update(dt); this.birds.update(dt);
     if (this.litAnim >= 0) { this.litAnim += dt / 9; this.terrain.lit = clamp(this.litAnim, 0, 1); this.terrain.applyLit(this.terrain.lit); if (this.litAnim >= 1) { this.litAnim = -1; audio.music(true, 0.5); } }
     const nearTx = this.mode === 'climb' && c.repaired && c.pos.distanceTo(this.tower.transmitter) < 6 ? 1 : 0;
-    const buzz = this.mode === 'climb' ? this.tower.electrical.reduce((m, e, i) => Math.max(m, this.tower.arcAt(i) * clamp(1 - Math.abs(c.chest - e.y) / 6, 0, 1)), 0) : 0;
+    const buzz = this.mode === 'climb' ? this.tower.electrical.reduce((m, e, i) => Math.max(m, this.tower.arcPhase(i) * clamp(1 - Math.abs(c.chest - e.y) / 6, 0, 1)), 0) : 0;
     audio.ambience(dt, this.weather.cur.wind, this.weather.gust, this.mode === 'climb' ? c.altitude : 2, this.weather.cur.rain, nearTx, buzz, this.weather.radioDead > 0 && this.staticT > 0 ? 1 : 0);
     return cam;
   }
