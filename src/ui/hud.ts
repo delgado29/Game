@@ -33,7 +33,7 @@ export class Hud {
     const altB = this.alt.querySelector('b')!; altB.innerHTML = `${Math.max(0, c.altitude).toFixed(0)}<small>m</small>`;
     const sp = clamp(c.stamina / c.maxStamina, 0, 1); this.stamBar.style.width = `${sp * 100}%`; this.stam.classList.toggle('low', sp < 0.25);
     this.windBar.style.width = `${clamp(w.windSpeed / 1.4, 0, 1) * 100}%`;
-    const on = c.anchor !== null; this.clip.className = `clip mono ${on ? 'on' : 'off'}`;
+    const on = c.anchor !== null; this.clip.className = `clip mono ${on ? (c.leashFrac > 0.8 ? 'on warn' : 'on') : 'off'}`;
     this.clip.innerHTML = on ? `${t('clipped')}<small>${(Math.abs(c.chest - (c.anchorY ?? 0))).toFixed(1)} / ${c.leash.toFixed(1)} m</small>` : `${t('unclipped')}<small>${c.onLadder ? '' : '&nbsp;'}</small>`;
     this.clip.hidden = !(c.onLadder);
     this.obj.textContent = objective;

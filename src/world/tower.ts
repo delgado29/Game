@@ -53,7 +53,7 @@ export class Tower {
     // ladder rails + rungs on the +Z face
     const rails: THREE.Matrix4[] = []; const rungs: THREE.Matrix4[] = []; const brokenM: THREE.Matrix4[] = [];
     const lz = (y: number) => hw(y) + LADDER_OFF;
-    for (let s = 0; s < nSeg; s++) { const y0 = s * seg, y1 = Math.min(H + 1.2, (s + 1) * seg); for (const x of [-0.28, 0.28]) rails.push(member(new THREE.Vector3(x, y0, lz(y0)), new THREE.Vector3(x, y1, lz(y1)), 0.05)); }
+    for (let s = 0; s <= nSeg; s++) { const y0 = s * seg; if (y0 >= H + 1.9) break; const y1 = Math.min(H + 1.9, (s + 1) * seg); for (const x of [-0.28, 0.28]) rails.push(member(new THREE.Vector3(x, y0, lz(y0)), new THREE.Vector3(x, y1, lz(y1)), 0.05)); }
     const rungGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.56, 8); rungGeo.rotateZ(Math.PI / 2);
     const brokenSet = new Set(spec.brokenRungs.map((h) => Math.round(h / RUNG_STEP)));
     for (let i = 1; i * RUNG_STEP <= H + 1.6; i++) {

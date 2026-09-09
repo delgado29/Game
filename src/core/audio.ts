@@ -95,6 +95,10 @@ export class Audio {
   radioBlip() { this.tone('square', 1200, 1200, 0.05, 0.005, 0.05); }
   heartbeat(dt: number, rate: number) { if (!this.ctx || rate <= 0) return; this.heartTimer -= dt * rate; if (this.heartTimer <= 0) { this.heartTimer = 1; this.tone('sine', 70, 40, 0.35, 0.01, 0.15); setTimeout(() => this.tone('sine', 60, 35, 0.25, 0.01, 0.15), 140); } }
   breath() { this.burst(0.06, 0.2, 0.5, 600, 'bandpass', 0.7); }
+  /** Short exhale on a pull-up; heavier packs sound lower and louder. */
+  pull(weight: number) { this.burst(0.05 + weight * 0.06, 0.03, 0.22 + weight * 0.15, 700 - weight * 250, 'bandpass', 0.9); }
+  /** Lanyard going taut. */
+  ropeCreak() { this.tone('sawtooth', 160, 90, 0.06, 0.02, 0.3); this.burst(0.12, 0.005, 0.12, 900, 'bandpass', 3); }
   powerUp() { this.tone('sine', 60, 220, 0.3, 1.2, 1.5); this.tone('triangle', 220, 440, 0.15, 1.5, 1.5); setTimeout(() => this.burst(0.15, 0.01, 0.6, 3000, 'highpass'), 1200); }
   private chordIdx = 0;
   private chord() {

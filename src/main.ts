@@ -168,4 +168,6 @@ const game = new Game();
   setWeather: (w: { cloud: number; rain: number; wind: number; storm: number }, over = 1) => game.weather.setTarget(w, over),
   screen: (s: Screen) => game.menus.show(s),
   sim: (seconds: number, dt?: number) => game.sim(seconds, dt),
+  /** Deterministic probes: no wind, no gusts, no storm. */
+  calm: () => { game.weather.setTarget({ cloud: 0.3, rain: 0, wind: 0, storm: 0 }, 1); game.weather.calm(); },
 };

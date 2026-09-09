@@ -32,6 +32,8 @@ export class Climber {
   descending = false;
   prompt = ''; message = ''; messageT = 0; brace = false; slipping = false;
   shake = 0; flashRed = 0; deadT = 0;
+  pullBob = 0;            // 1 right after a pull-up, decays; drives the camera dip
+  private pullRate = 7;   // how fast the body follows the hands (slower with a heavy pack)
   private vel = 0; private noHandsT = 0; private fallT = 0; private slipT = 0; private restT = 0;
   private time = 0; private stepT = 0;
   private events: ((e: ClimbEvent, data?: unknown) => void)[] = [];
@@ -47,7 +49,7 @@ export class Climber {
   }
   on(cb: (e: ClimbEvent, data?: unknown) => void) { this.events.push(cb); }
   private emit(e: ClimbEvent, data?: unknown) { for (const cb of this.events) cb(e, data); }
-  setPerks(p: Perks) { this.perks = p; this.maxStamina = p.rations ? 130 : 100; this.stamina = this.maxStamina; this.leash = p.longLeash ? 4.6 : 3.4; this.weather.warnLead = p.wradio ? 4.5 : 1.5; this.tower.showHazards(p.drone); }
+  setPerks(p: Perks) { this.perks = p; this.maxStamina = p.rations ? 130 : 100; this.stamina = this.maxStamina; this.leash = p.longLeash ? 4.6 : 3.4; this.pullRate = 7 / (1 + p.weight / 14); this.weather.warnLead = p.wradio ? 4.5 : 1.5; this.tower.showHazards(p.drone); }
   setTower(tower: Tower) { this.tower = tower; }
   dispose() { for (const h of this.hands) this.scene.remove(h.mesh); this.scene.remove(this.figure); }
   reset() {
@@ -61,6 +63,8 @@ export class Climber {
   get gripping() { return this.hands.filter((h) => h.rung !== null).length; }
   get onLadder() { return this.state === 'ladder' || this.state === 'falling'; }
   get anchorY() { return this.anchor === null ? null : this.tower.anchors[this.anchor]; }
+  /** 0..1 how much of the lanyard is used up (0 when unclipped). */
+  get leashFrac() { const ay = this.anchorY; return ay === null ? 0 : clamp(Math.abs(this.chest - ay) / this.leash, 0, 1); }
   say(key: string, dur = 2.2) { this.message = t(key); this.messageT = dur; }
   /** Keyboard hint for prompts; hidden on touch devices. */
   private k(key: string) { return this.input.isTouch ? '' : ` (${key})`; }
@@ -77,7 +81,7 @@ export class Climber {
     dt = Math.min(dt, 0.05); this.time += dt; if (this.state !== 'dead' && this.state !== 'rest') this.elapsed += dt;
     if (this.state !== 'rest' && this.state !== 'dead') this.handleLook(dt, invertY, sens);
     if (this.messageT > 0) { this.messageT -= dt; if (this.messageT <= 0) this.message = ''; }
-    this.shake = damp(this.shake, 0, 6, dt); this.flashRed = damp(this.flashRed, 0, 5, dt);
+    this.shake = damp(this.shake, 0, 6, dt); this.flashRed = damp(this.flashRed, 0, 5, dt); this.pullBob = damp(this.pullBob, 0, 4.5, dt);
     this.prompt = '';
     switch (this.state) {
       case 'ground': this.updateWalk(dt, true); break;
@@ -118,7 +122,7 @@ export class Climber {
     if (this.input.pressed.has('photo') && this.perks.camera) this.emit('photo');
   }
   private hitsTowerBase(p: THREE.Vector3) { const hw = this.tower.hw(0) + 0.2; return Math.abs(p.x) < hw && Math.abs(p.z) < hw; }
-  private hitsVan(p: THREE.Vector3) { const d = p.clone().sub(this.vanPos); return Math.abs(d.x) < 1.4 && Math.abs(d.z) < 2.6; }
+  private hitsVan(p: THREE.Vector3) { const d = p.clone().sub(this.vanPos).applyAxisAngle(new THREE.Vector3(0, 1, 0), -(Math.PI + 0.35)); return Math.abs(d.x) < 1.3 && Math.abs(d.z) < 3.0; }
   private mountLadder(y: number) {
     this.state = 'ladder'; this.pos.set(0, y, this.tower.ladderZ(y) + 0.55); this.yaw = 0; this.pitch = 0.35; this.vel = 0; this.noHandsT = 0;
     const i = this.tower.rungAt(y + CHEST + HAND_REST); this.hands[0].rung = i; this.hands[1].rung = Math.min(i + 1, this.tower.rungY.length - 1); audio.grab();
@@ -141,7 +145,7 @@ export class Climber {
     if (held.length) {
       const hy = held.reduce((s, h) => s + T.rungY[h.rung!], 0) / held.length; let target = hy - CHEST - HAND_REST - (held.length === 1 ? 0.15 : 0);
       target = this.clampLeash(target);
-      this.pos.y = damp(this.pos.y, target, 7, dt); this.noHandsT = 0;
+      this.pos.y = damp(this.pos.y, target, this.pullRate, dt); this.noHandsT = 0;
     } else {
       const ay = this.anchorY;
       if (ay !== null && this.chest <= ay - this.leash + 0.05) { /* hanging in the harness */ this.noHandsT = 0; }
@@ -168,8 +172,9 @@ export class Climber {
     const y = T.rungY[i]; if (Math.abs(y - (this.pos.y + CHEST + HAND_REST)) > 1.15) return;
     // leash: refuse a grab that would drag the body past the rope
     const other = this.hands[1 - hi].rung; const meanY = other === null ? y : (y + T.rungY[other]) / 2; const target = meanY - CHEST - HAND_REST;
-    if (this.clampLeash(target) !== target && Math.abs(this.clampLeash(target) - target) > 0.05) { this.say('reclip', 1.2); audio.releaseHand(); return; }
+    if (this.clampLeash(target) !== target && Math.abs(this.clampLeash(target) - target) > 0.05) { this.say('reclip', 1.2); this.shake = Math.max(this.shake, 0.35); audio.ropeCreak(); return; }
     h.rung = i; h.snapT = 0; audio.grab();
+    if (this.state === 'ladder' && target > this.pos.y + 0.12) { this.pullBob = other === null ? 1 : 0.6; audio.pull(clamp(this.perks.weight / 9, 0, 1)); }
     if (this.state === 'falling' && this.vel < 4.5) { this.state = 'ladder'; this.stamina -= 22; this.shake = 0.5; this.vel = 0; }
   }
   private clampLeash(targetFeetY: number) { const ay = this.anchorY; if (ay === null) return targetFeetY; const c = targetFeetY + CHEST; return clamp(c, ay - this.leash, ay + this.leash) - CHEST; }
@@ -255,9 +260,10 @@ export class Climber {
     const swayY = Math.sin(this.time * 2.3) * 0.015 * wind * hf + (this.onLadder ? Math.sin(this.time * 2.0) * 0.01 : 0);
     const tremble = this.slipping ? 0.012 : 0; const sh = this.shake * 0.08;
     const eye = this.state === 'dead' ? 0.4 : EYE;
-    cam.position.set(this.pos.x + swayX + (Math.random() - 0.5) * (tremble + sh), this.pos.y + eye + swayY + (Math.random() - 0.5) * (tremble + sh), this.pos.z + (Math.random() - 0.5) * sh);
+    const dip = -0.07 * this.pullBob; // pull-up: the head dips as the arms take the load, then rises
+    cam.position.set(this.pos.x + swayX + (Math.random() - 0.5) * (tremble + sh), this.pos.y + eye + swayY + dip + (Math.random() - 0.5) * (tremble + sh), this.pos.z + (Math.random() - 0.5) * sh);
     const roll = -swayX * 0.6 + (this.state === 'dead' ? 0.6 : 0) + (Math.random() - 0.5) * sh * 0.5;
-    cam.rotation.set(0, 0, 0); cam.rotation.order = 'YXZ'; cam.rotation.y = this.yaw; cam.rotation.x = this.state === 'dead' ? -0.5 : this.pitch; cam.rotation.z = roll;
+    cam.rotation.set(0, 0, 0); cam.rotation.order = 'YXZ'; cam.rotation.y = this.yaw; cam.rotation.x = (this.state === 'dead' ? -0.5 : this.pitch) - this.pullBob * 0.04; cam.rotation.z = roll;
     cam.fov = damp(cam.fov, this.state === 'falling' ? 84 : 72, 4, dt); cam.updateProjectionMatrix();
   }
   private updateHands(dt: number) {

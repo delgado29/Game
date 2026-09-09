@@ -38,6 +38,8 @@ export class Weather {
   setScript(script: WeatherPhase[]) { this.script = script; this.fired.clear(); this.time = 0; for (const p of script) if (p.at === 'start') { this.cur = { ...p.target }; this.target = { ...p.target }; this.fired.add(p); } }
   setTarget(t: WeatherTarget, over: number) { this.target = { ...t }; this.rate = 1 / Math.max(1, over); }
   event(kind: 'repaired') { for (const p of this.script) if (p.at === kind && !this.fired.has(p)) { this.fired.add(p); this.setTarget(p.target, p.over); } }
+  /** Stops gusts for a long time (tests). */
+  calm() { this.gust = 0; this.gustT = -1; this.nextGust = 1e9; this.gustWarning = false; }
   get windSpeed() { return clamp(this.cur.wind + this.gust * (0.5 + this.cur.storm * 0.6), 0, 1.6); }
 
   update(dt: number, cam: THREE.Vector3, altitude: number) {

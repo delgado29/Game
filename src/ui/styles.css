@@ -60,7 +60,7 @@
 .meter.stam.low .bar > i { background: var(--danger); }
 .meter.wind .bar > i { background: var(--signal); }
 .clip { position: absolute; top: max(16px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); text-align: right; font-size: 12px; letter-spacing: 0.2em; font-weight: 700; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,0.4); }
-.clip.on { color: var(--ok); } .clip.off { color: var(--danger); }
+.clip.on { color: var(--ok); } .clip.off { color: var(--danger); } .clip.on.warn { color: #ffb347; }
 .clip small { display: block; letter-spacing: 0.05em; font-weight: 500; color: var(--dim); font-size: 11px; }
 .obj { position: absolute; top: calc(max(16px, env(safe-area-inset-top)) + 46px); right: max(20px, env(safe-area-inset-right)); font-size: 13px; color: var(--dim); text-align: right; }
 .prompt { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); background: rgba(0,0,0,0.5); padding: 8px 14px; border-radius: 8px; font-size: 15px; white-space: nowrap; border: 1px solid var(--line); }

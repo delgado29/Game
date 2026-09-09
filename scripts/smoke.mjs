@@ -106,14 +106,14 @@ await page.getByRole('button', { name: /Gallery|Galería/ }).click(); await snap
 await ev(() => { const s = window.SIGNAL.save; s.loadout = ['harness', 'tools', 'battery', 'drone']; window.SIGNAL.start('blackridge'); }); await page.waitForTimeout(400); await ev(() => { window.SIGNAL.game.paused = false; window.SIGNAL.screen('none'); }); await step(10);
 st = await ev(() => ({ anchors: window.SIGNAL.tower.anchors.length, broken: window.SIGNAL.tower.broken.size, cuts: window.SIGNAL.tower.spec.cutAnchors })); console.log('blackridge:', JSON.stringify(st));
 assert(!(await ev(() => window.SIGNAL.tower.anchors.some((a) => a > 78 && a < 92))), 'no anchors inside the cut range');
-await ev(() => { window.SIGNAL.teleport(76); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.6; }); await step(3); await ev(() => window.SIGNAL.clip());
+await ev(() => { window.SIGNAL.calm(); window.SIGNAL.teleport(76); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.6; }); await step(3); await ev(() => window.SIGNAL.clip());
 st = await ev(() => window.SIGNAL.climber.anchor); assert(st !== null, 'clipped below the cut');
-r = await climbTo(82, 60); st = await ev(() => ({ y: window.SIGNAL.climber.pos.y, msg: window.SIGNAL.climber.message })); assert(st.y < 82, `leash stopped the climb at ${st.y.toFixed(1)} m (${st.msg})`); await snap('cut-cable');
+r = await climbTo(82, 60); st = await ev(() => ({ y: window.SIGNAL.climber.pos.y, msg: window.SIGNAL.climber.message, state: window.SIGNAL.climber.state })); assert(st.y < 82 && st.state === 'ladder', `leash stopped the climb at ${st.y.toFixed(1)} m (${st.msg}, ${st.state})`); await snap('cut-cable');
 // unclip (anchor=null) and climb exposed, then let go: an unclipped fall kills
 await ev(() => { window.SIGNAL.climber.anchor = null; }); r = await climbTo(86, 60); assert(r.done, `climbed exposed to ${r.y?.toFixed(1)}`);
 await ev(() => { window.SIGNAL.climber.anchor = null; for (const h of window.SIGNAL.climber.hands) h.rung = null; }); await step(420);
 st = await ev(() => ({ state: window.SIGNAL.climber.state, screen: window.SIGNAL.game.menus.screen })); assert(st.state === 'dead' && st.screen === 'dead', `unclipped fall is fatal (${st.state}/${st.screen})`); await snap('fell');
-await page.getByRole('button', { name: /last platform|última plataforma/ }).click(); await step(5);
+await page.getByRole('button', { name: /last platform|última plataforma/ }).click(); await page.waitForTimeout(350); await ev(() => { window.SIGNAL.game.paused = false; window.SIGNAL.screen('none'); }); await step(5);
 st = await ev(() => ({ state: window.SIGNAL.climber.state, y: window.SIGNAL.climber.pos.y })); assert(st.state === 'ground' || st.state === 'platform', `respawned (${st.state} at ${st.y.toFixed(0)} m)`);
 // broken rung snaps, electrical box arcs
 await ev(() => { window.SIGNAL.teleport(50.2); const c = window.SIGNAL.climber; c.pitch = 0.5; for (const h of c.hands) h.rung = null; const i = [...c.tower.broken][0]; c.hands[0].rung = i; }); await step(40);
