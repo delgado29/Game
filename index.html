@@ -19,6 +19,8 @@
   body { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
   #gl { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
   #ui { position: fixed; inset: 0; pointer-events: none; }
+  /* no double-tap zoom on menus and buttons; panels may still pan/scroll */
+  #ui, #ui * { touch-action: manipulation; }
 </style>
 </head>
 <body>
@@ -27,6 +29,15 @@
 <noscript><div style="color:#dfe6f0;padding:2rem;font-family:system-ui">SIGNAL needs JavaScript and WebGL.</div></noscript>
 <script type="module" src="signal.js"></script>
 <script>
+  // iOS Safari ignores user-scalable=no in the browser: block double-tap and pinch zoom by hand.
+  (function () {
+    var last = 0;
+    document.addEventListener('touchend', function (e) { var now = Date.now(); if (now - last < 320) e.preventDefault(); last = now; }, { passive: false });
+    document.addEventListener('dblclick', function (e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gesturestart', function (e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gesturechange', function (e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('touchmove', function (e) { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  })();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
   }
