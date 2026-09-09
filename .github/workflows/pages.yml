@@ -25,14 +25,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build icons and single-file bundles for every game
-        run: |
-          node cafetal/icons.mjs
-          node lena/icons.mjs
-          node scripts/build.mjs
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: dist
       - id: deployment
         uses: actions/deploy-pages@v4
