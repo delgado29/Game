@@ -10,6 +10,7 @@ export class Sky {
   fog: THREE.FogExp2;
   sunAzimuth = 0.9; sunElev = 0.45; // radians
   overcast = 0; flash = 0; night = 0;
+  /** Unit vector toward the sun. */ sunDir = new THREE.Vector3(0, 1, 0);
   constructor(scene: THREE.Scene) {
     this.mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
@@ -57,7 +58,7 @@ export class Sky {
   update(dt: number, cameraPos: THREE.Vector3, rain: number) {
     this.mesh.position.copy(cameraPos);
     const dir = new THREE.Vector3(Math.cos(this.sunAzimuth) * Math.cos(this.sunElev), Math.sin(this.sunElev), Math.sin(this.sunAzimuth) * Math.cos(this.sunElev));
-    this.mat.uniforms.sunDir.value.copy(dir); this.mat.uniforms.overcast.value = this.overcast; this.mat.uniforms.flash.value = this.flash; this.mat.uniforms.time.value += dt;
+    this.sunDir.copy(dir); this.mat.uniforms.sunDir.value.copy(dir); this.mat.uniforms.overcast.value = this.overcast; this.mat.uniforms.flash.value = this.flash; this.mat.uniforms.time.value += dt;
     this.night = clamp(-this.sunElev / 0.25, 0, 1); this.mat.uniforms.night.value = this.night;
     this.sun.position.copy(dir).multiplyScalar(500).add(cameraPos); this.sun.target.position.copy(cameraPos); this.sun.target.updateMatrixWorld();
     const dusk = clamp((0.35 - this.sunElev) / 0.4, 0, 1);

@@ -46,7 +46,7 @@ export class Hud {
   relabel() { this.altLabel.textContent = t('altitude'); this.stamLabel.textContent = t('stamina'); this.windLabel.textContent = t('wind'); this.cache.clear(); }
   fade(a: number) { this.css(this.fadeEl, 'opacity', a.toFixed(2)); }
 
-  update(dt: number, c: Climber, w: Weather, objective: string, hint: string, timer: string) {
+  update(dt: number, c: Climber, w: Weather, objective: string, hint: string, timer: string, timerOver = false) {
     this.text(this.altNum, Math.max(0, c.altitude).toFixed(0));
     const sp = clamp(c.stamina / c.maxStamina, 0, 1); this.pct(this.stamBar, sp); this.cls(this.stam, sp < 0.25 ? 'meter stam low' : 'meter stam');
     this.pct(this.windBar, w.windSpeed / 1.4);
@@ -59,7 +59,7 @@ export class Hud {
       else { this.cls(this.clip, 'clip mono off'); this.text(this.clipMain, t('unclipped')); this.text(this.clipSub, ''); }
     }
     this.text(this.obj, objective);
-    this.hide(this.timer, !timer); if (timer) this.text(this.timer, timer);
+    this.hide(this.timer, !timer); if (timer) { this.text(this.timer, timer); this.cls(this.timer, timerOver ? 'timer mono over' : 'timer mono'); }
     this.hide(this.tut, !hint); if (hint) this.text(this.tut, hint);
     this.hide(this.prompt, !c.prompt); if (c.prompt) this.text(this.prompt, c.prompt);
     this.hide(this.msg, !c.message);
@@ -88,6 +88,8 @@ export class Hud {
     this.radioWho.textContent = t(who === 'dispatch' ? 'whoDispatch' : who === 'you' ? 'whoYou' : 'whoUnknown');
     this.radioFull = text; this.radioChars = 0; this.radioText.textContent = ''; this.radioT = dur;
   }
+  /** A found document, shown in the radio box. */
+  note(title: string, text: string, dur: number) { this.radio.hidden = false; this.radio.className = 'radio note'; this.radioWho.textContent = title; this.radioFull = text; this.radioChars = 0; this.radioText.textContent = ''; this.radioT = dur; }
   noise(dur: number) { this.radio.hidden = false; this.radio.className = 'radio unknown'; this.radioWho.textContent = '- - -'; this.radioFull = '▒▒▒ ▒▒ ▒▒▒▒▒ ▒▒▒ ▒▒▒▒'; this.radioChars = 99; this.radioText.textContent = this.radioFull; this.radioT = dur; }
   hideRadio() { this.radio.hidden = true; this.radioT = 0; }
 }

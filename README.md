@@ -44,7 +44,22 @@ npm run build      # static site in dist/
 
 ## Gear and weight
 
-The pack holds 8 kg. Everything has a weight and an effect: gloves, a longer lanyard, a weather radio that warns of gusts earlier, a signal analyzer that tunes instantly, a camera, a scout drone, water and gels, and the heavy battery pack some towers need. Credits from finished jobs buy more.
+The pack starts at 8 kg and can be upgraded to 10. Everything has a weight and an effect: gloves, a longer lanyard, a weather radio that warns of gusts earlier, a signal analyzer, a camera, a scout drone, water and gels, the heavy battery pack some towers need, a headlamp for night work, and a cable grab that rides the safety cable so you never re-clip while the cable is intact. Several items upgrade through three levels. Higher ranks unlock more of the shop.
+
+## Reasons to keep climbing
+
+- **Career.** Every job pays XP: new height on a tower, the restoration itself, clean climbs, contracts, finds, medals. Five ranks, from Apprentice to Network chief, unlock gear and contract types.
+- **Medals.** Each tower has four: Restored, No falls, Under par, All found.
+- **Contracts.** A restored tower offers routine maintenance at any time, plus three daily contracts across the network: structural inspections, express call-outs against the clock, heavy hauls, storm work and night shifts.
+- **Secrets.** Logbook pages left by the crew that climbed before you, and stray signal fragments that only the analyzer can capture. Together they explain what is shutting the network down.
+- **Photo assignments.** Eight shots that pay when you take them: golden hour, the town lit up, a lightning strike, the flock from above, and more.
+- **The van** keeps it all: the network map and contract board, your career record and milestones, the logbook and the gallery.
+
+Progress saves on every platform, so a closed tab or a dead battery costs nothing: the van offers to resume the climb.
+
+## Settings
+
+Graphics quality (Auto, Low, Medium, High; Auto also scales resolution to hold the frame rate), grip control (hold to grip, or tap to move a hand), look sensitivity, field of view, reduce motion, left-handed touch layout, language (English, Spanish).
 
 ## Towers
 
@@ -53,15 +68,15 @@ The pack holds 8 kg. Everything has a weight and an effect: gloves, a longer lan
 | Pinegrove Relay | 90 m | Intact. Mild weather that turns to rain after the repair. |
 | Black Ridge Mast | 180 m | Went silent overnight. Cut cables, sawn rungs, live boxes, a storm on the way down, and a signal that should not exist. |
 
-Towers are data: see `src/game/towers.ts` for the spec format (geometry, platforms, cut ranges, hazards, weather script, radio lines).
+Towers are data: see `src/game/towers.ts` for the spec format (geometry, platforms, cut ranges, hazards, weather script, radio lines, collectibles).
 
 ## Development
 
 ```
 npm run typecheck   # tsc --noEmit
 npm run build       # icons + esbuild bundle -> dist/
-npm run smoke       # headless Playwright play-through with screenshots in dist/shots/
-node scripts/smoke.mjs dist/shots-touch touch   # same, at iPad size with touch controls
+npm run smoke       # headless Playwright play-through with screenshots in shots/
+node scripts/smoke.mjs shots/touch touch   # same, at iPad size with touch controls
 ```
 
 ### Layout
@@ -72,10 +87,12 @@ public/                 manifest, service worker, generated icons
 scripts/build.mjs       esbuild bundle + static copy (--serve for the dev server)
 scripts/icons.mjs       pixel-art app icon -> PNG (scripts/png.mjs is a dependency-free encoder)
 scripts/smoke.mjs       Playwright smoke test driven through the window.SIGNAL debug API
-src/main.ts             game orchestration: screens, story, network lights, photos, debug API
-src/core/               input (keyboard, mouse, touch), WebAudio synth, save, i18n (EN/ES), math
-src/world/              sky shader, weather (wind, gusts, rain, lightning), terrain + town, tower generator, props
-src/climb/climber.ts    first-person climber: grip, lanyard, stamina, falls, hazards, rest mode, repair
-src/game/               tower specs, gear catalogue, shared types
-src/ui/                 HUD, menus (van, towers, loadout, settings, gallery, debrief), touch controls, styles
+src/main.ts             orchestration: jobs, rewards, events, photos, frame loop, debug API
+src/core/               input, WebAudio synth, save (v2, migrating), i18n (EN/ES), quality tiers, haptics, math
+src/world/              sky, weather, terrain + town, tower generator, props, post-processing
+src/climb/climber.ts    first-person climber: grip, lanyard, cable grab, stamina, falls, hazards, hold-to-work, rest
+src/game/               towers, gear and perks, career, contracts, photo assignments, radio queue, tutorial, balance
+src/ui/                 HUD, menus (van, map, loadout, career, logbook, gallery, settings, debrief), touch, styles
 ```
+
+`npm run smoke` writes screenshots to `shots/`. Add `?q=low`, `?q=medium` or `?q=high` to the URL to force a graphics tier.

@@ -38,6 +38,8 @@ const D: Dict = {
   clickToPlay: ['Click to take the controls', 'Haz clic para tomar los controles'],
   controls: ['Mouse: look · WASD: walk · Hold LMB/RMB (or Q/E): left/right hand · Space: clip · F: use · V: rest · C: photo · Esc: menu', 'Ratón: mirar · WASD: andar · Mantén clic izq/der (o Q/E): mano izq/der · Espacio: anclar · F: usar · V: descansar · C: foto · Esc: menú'],
   quit: ['Abandon climb', 'Abandonar'], resume: ['Resume', 'Seguir'], paused: ['Paused', 'Pausa'],
+  rFilter: ['Cleaning the filters', 'Limpiando los filtros'],
+  objInspect: ['Inspect the tagged points', 'Inspecciona los puntos marcados'], objService: ['Service the transmitter', 'Atiende el transmisor'],
   // radio
   whoDispatch: ['DISPATCH', 'CENTRAL'], whoYou: ['YOU', 'TÚ'], whoUnknown: ['?????', '?????'],
   // settings

@@ -23,10 +23,16 @@ jobs:
       - run: npm run build
       - name: Install a browser for the smoke test
         run: npm install --no-save playwright && npx playwright install --with-deps chromium
+      # The runner has no GPU: the low tier keeps software-rendered frames cheap. The composer path is still
+      # exercised by the test's live quality switch.
       - name: Smoke test (desktop)
         run: node scripts/smoke.mjs shots/desktop
+        env:
+          SMOKE_Q: low
       - name: Smoke test (touch)
         run: node scripts/smoke.mjs shots/touch touch
+        env:
+          SMOKE_Q: low
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,6 +1,6 @@
 import type { WeatherPhase } from '../world/weather';
 
-export interface RadioLine { at: 'start' | 'alt' | 'descentAlt' | 'repaired' | 'clipped' | 'firstPlatform' | 'cut' | 'strange' | 'stepOnTop' | 'landed'; value?: number; en: string; es: string; who?: 'dispatch' | 'you' | 'unknown'; }
+export interface RadioLine { at: 'start' | 'alt' | 'descentAlt' | 'repaired' | 'clipped' | 'firstPlatform' | 'cut' | 'strange' | 'stepOnTop' | 'landed' | 'ice' | 'clouds'; value?: number; en: string; es: string; who?: 'dispatch' | 'you' | 'unknown'; }
 
 export interface TowerSpec {
   id: string; name: string; en: string; es: string; height: number; baseWidth: number; topWidth: number;
@@ -15,6 +15,7 @@ export interface TowerSpec {
   reward: number; requires: string[]; unlocks?: string;
   sabotaged: boolean;
   /** Target time in seconds for the Under Par medal. */ par: number;
+  /** Position on the network map (viewBox 600x380). */ map: { x: number; y: number };
   /** Rungs above this height are iced over. */ iceAbove?: number;
   /** Guyed mast: constant width with tensioned stay cables. */ guyed?: boolean;
   collectibles: Collectible[];

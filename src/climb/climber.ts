@@ -51,6 +51,9 @@ export class Climber {
   reachDir: 1 | -1 | 0 = 0;
   /** Assisted grip: a tap moves that hand to the next rung; hands never let go on their own. */
   tapGrip = false;
+  /** 0 day .. 1 night; the headlamp only burns in the dark. */
+  night = 0;
+  private lamp: THREE.SpotLight;
   perks: Perks = { weight: 3, fatigueMul: 1, gloves: false, leash: B.leash, maxStamina: 100, regen: B.regenPlatform, warnLead: 1.5, tools: true, battery: false, analyzer: false, camera: false, drone: false, headlamp: false, arrester: false };
 
   private work: Work | null = null;
@@ -67,6 +70,8 @@ export class Climber {
     const mk = (left: boolean): Hand => { const mesh = makeHand(left); scene.add(mesh); return { rung: null, mesh, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), snapT: 0 }; };
     this.hands = [mk(true), mk(false)];
     this.figure = makeClimberFigure(); this.figure.visible = false; scene.add(this.figure);
+    this.lamp = new THREE.SpotLight(0xfff0d6, 0, 55, 0.55, 0.7, 1.4); this.lamp.position.set(0, 0.12, 0); this.lamp.target.position.set(0, -0.05, -1);
+    this.camera.add(this.lamp, this.lamp.target); scene.add(this.camera);
   }
   on(cb: (e: ClimbEvent, data?: unknown) => void) { this.events.push(cb); }
   private emit(e: ClimbEvent, data?: unknown) { for (const cb of this.events) cb(e, data); }
@@ -75,7 +80,7 @@ export class Climber {
     this.pullRate = 7 / (1 + p.weight / 14); this.weather.warnLead = p.warnLead; this.tower.showHazards(p.drone);
   }
   setComfort(fov: number, reduceMotion: boolean) { this.comfort = { fov, motion: reduceMotion ? 0.3 : 1 }; }
-  dispose() { for (const h of this.hands) this.scene.remove(h.mesh); this.scene.remove(this.figure); }
+  dispose() { for (const h of this.hands) this.scene.remove(h.mesh); this.scene.remove(this.figure); this.scene.remove(this.camera); this.lamp.dispose(); }
   reset() {
     this.state = 'ground'; this.pos.set(this.vanPos.x - 2, 0, this.vanPos.z - 3); this.yaw = Math.atan2(this.pos.x, this.pos.z); this.pitch = 0.25;
     this.stamina = this.maxStamina; this.anchor = null; this.falls = 0; this.maxAlt = 0; this.elapsed = 0; this.clips = 0;
@@ -107,6 +112,8 @@ export class Climber {
   get workProgress() { const w = this.work; return w ? clamp(w.t / w.steps[w.i].dur, 0, 1) : 0; }
   get workLabel() { const w = this.work; if (!w) return ''; const n = w.steps.length; return n > 1 ? `${t(w.steps[w.i].key)} (${w.i + 1}/${n})` : t(w.steps[w.i].key); }
   say(key: string, dur = 2.2) { this.message = t(key); this.messageT = dur; }
+  /** Show literal text in the message slot. */
+  note(text: string, dur = 2.5) { this.message = text; this.messageT = dur; }
   /** Marks the job's task as done (transmitter repaired, or every inspection tag checked). */
   completeJob() { if (this.repaired) return; this.repaired = true; this.descending = true; this.emit('repaired'); }
   /** Keyboard hint for prompts; hidden on touch devices. */
@@ -297,7 +304,7 @@ export class Climber {
   private caught(cost: number, shake: number) {
     this.state = 'ladder'; this.vel = 0; this.falls++; this.stamina -= cost; this.shake = shake;
     audio.jerk(); haptic(80); this.say('caught', 2); this.emit('caught');
-    // hang there: put a hand back on if the player is holding a grip
+    // the cable grab holds no weight on its own: put a hand back on the steel so the climber is not dropped again
     if (this.fallGuarded) { const i = this.tower.rungAt(this.pos.y + CHEST + HAND_REST); if (!this.tower.snapped.has(i)) this.hands[0].rung = i; }
   }
   /** A short drop onto the ground: bruised, not dead. */
@@ -378,6 +385,7 @@ export class Climber {
     cam.rotation.order = 'YXZ'; cam.rotation.set((this.state === 'dead' ? -0.5 : this.pitch) - this.pullBob * 0.04 * m, this.yaw, roll);
     cam.fov = damp(cam.fov, this.comfort.fov + (this.state === 'falling' ? 12 : 0), 4, dt); cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
+    this.lamp.intensity = this.perks.headlamp ? this.night * 70 : 0;
   }
   private updateHands(dt: number) {
     const T = this.tower; const cam = this.camera; const show = this.state !== 'rest' && this.state !== 'dead';
@@ -412,6 +420,6 @@ export class Climber {
   debugClip() { this.tryClip(); return this.anchor; }
   debugTeleport(y: number) {
     this.state = 'ladder'; this.pos.set(0, y, this.tower.ladderZ(y) + 0.55); const i = this.tower.rungAt(y + CHEST + HAND_REST);
-    this.hands[0].rung = i; this.hands[1].rung = i + 1; this.anchor = null; this.vel = 0; this.noHandsT = 0; this.work = null;
+    this.hands[0].rung = i; this.hands[1].rung = Math.min(i + 1, this.tower.rungY.length - 1); this.anchor = null; this.vel = 0; this.noHandsT = 0; this.work = null;
   }
 }
