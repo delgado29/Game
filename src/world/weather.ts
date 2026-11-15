@@ -38,6 +38,8 @@ export class Weather {
   setScript(script: WeatherPhase[]) { this.script = script; this.fired.clear(); this.time = 0; for (const p of script) if (p.at === 'start') { this.cur = { ...p.target }; this.target = { ...p.target }; this.fired.add(p); } }
   setTarget(t: WeatherTarget, over: number) { this.target = { ...t }; this.rate = 1 / Math.max(1, over); }
   event(kind: 'repaired') { for (const p of this.script) if (p.at === kind && !this.fired.has(p)) { this.fired.add(p); this.setTarget(p.target, p.over); } }
+  /** Snap to the current target (resuming a saved climb). */
+  jump() { this.cur = { ...this.target }; }
   /** Seconds until the next gust hits while the warning is up, else -1. */
   get gustIn() { return this.gustT < 0 && this.nextGust > 0 && this.nextGust < this.warnLead ? this.nextGust : -1; }
   /** Stops gusts for a long time (tests). */

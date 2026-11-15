@@ -1,0 +1,35 @@
+name: CI
+
+# Typecheck, build and play the game headlessly. Kept apart from the Pages deploy so a flaky browser run never blocks a release.
+on:
+  push:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Install a browser for the smoke test
+        run: npm install --no-save playwright && npx playwright install --with-deps chromium
+      - name: Smoke test (desktop)
+        run: node scripts/smoke.mjs shots/desktop
+      - name: Smoke test (touch)
+        run: node scripts/smoke.mjs shots/touch touch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshots
+          path: shots
+          retention-days: 7

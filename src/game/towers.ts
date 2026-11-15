@@ -22,7 +22,7 @@ export const TOWERS: TowerSpec[] = [
       { at: 'descentAlt', value: 40, who: 'dispatch', en: 'Wet steel. Slow hands. You are doing fine.', es: 'Acero mojado. Manos lentas. Lo estás haciendo bien.' },
       { at: 'landed', who: 'dispatch', en: 'Unit four is on the ground. Payment is in. Get in the van and dry off; there is a strange one on the ridge we need to talk about.', es: 'Unidad cuatro en tierra. Pago hecho. Métete en la furgoneta y sécate; hay una rara en la cresta de la que tenemos que hablar.' },
     ],
-    reward: 400, requires: ['tools'], unlocks: 'blackridge', sabotaged: false,
+    reward: 400, requires: ['tools'], unlocks: 'blackridge', sabotaged: false, par: 600, collectibles: [],
   },
   {
     id: 'blackridge', name: 'Black Ridge Mast', en: 'A 180 m mast on the ridge. Went silent overnight. The last crew never filed a report.', es: 'Un mástil de 180 m en la cresta. Se apagó de la noche a la mañana. La última cuadrilla nunca entregó informe.',
@@ -49,7 +49,7 @@ export const TOWERS: TowerSpec[] = [
       { at: 'descentAlt', value: 100, who: 'dispatch', en: 'Do not stop on the platforms. Keep clipped where you can and keep moving.', es: 'No pares en las plataformas. Mantente anclado donde puedas y sigue moviéndote.' },
       { at: 'landed', who: 'dispatch', en: 'You are down. You are down. Whoever cut that cable is going to hear that mast broadcasting from a hundred kilometres away. Good.', es: 'Estás abajo. Estás abajo. Quien cortó ese cable va a oír ese mástil emitiendo desde cien kilómetros. Bien.' },
     ],
-    reward: 900, requires: ['tools', 'battery'], sabotaged: true,
+    reward: 900, requires: ['tools', 'battery'], sabotaged: true, par: 1500, collectibles: [],
   },
 ];
 export const towerById = (id: string) => TOWERS.find((t) => t.id === id)!;

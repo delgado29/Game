@@ -1,5 +1,5 @@
 /** Unified input: keyboard + mouse (pointer lock) and touch overlays feed the same action state. */
-export type Action = 'gripL' | 'gripR' | 'clip' | 'act' | 'rest' | 'photo' | 'menu' | 'jump';
+export type Action = 'gripL' | 'gripR' | 'clip' | 'act' | 'rest' | 'photo' | 'menu';
 
 export class Input {
   held = new Set<Action>();
@@ -9,7 +9,6 @@ export class Input {
   move = { x: 0, y: 0 };            // -1..1 from keys or joystick
   touchMove = { x: 0, y: 0 };
   pointerLocked = false;
-  wantLock = false;
   isTouch = false;
   readonly canvas: HTMLCanvasElement;
   private keys = new Set<string>();

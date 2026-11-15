@@ -14,4 +14,11 @@ export interface TowerSpec {
   weather: WeatherPhase[]; story: RadioLine[];
   reward: number; requires: string[]; unlocks?: string;
   sabotaged: boolean;
+  /** Target time in seconds for the Under Par medal. */ par: number;
+  /** Rungs above this height are iced over. */ iceAbove?: number;
+  /** Guyed mast: constant width with tensioned stay cables. */ guyed?: boolean;
+  collectibles: Collectible[];
 }
+
+/** Things to find on platforms. `platform` indexes the sorted platform list (the top is last); `corner` is 0..3. */
+export interface Collectible { id: string; kind: 'page' | 'fragment'; platform: number; corner: number; en?: string; es?: string; titleEn?: string; titleEs?: string; }

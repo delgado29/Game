@@ -3,7 +3,7 @@
 // probes Black Ridge's cut cable with clipped vs unclipped falls. Screenshots along the way.
 //   node scripts/smoke.mjs [outDir] [touch]
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
@@ -14,10 +14,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.argv[2] || join(root, 'dist', 'shots'); const touch = process.argv[3] === 'touch';
 mkdirSync(outDir, { recursive: true });
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.map': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
-const server = createServer(async (req, res) => { const p = req.url === '/' ? '/index.html' : req.url.split('?')[0]; try { const data = await readFile(join(root, 'dist', p)); res.writeHead(200, { 'content-type': mime[p.slice(p.lastIndexOf('.'))] || 'application/octet-stream' }); res.end(data); } catch { res.writeHead(404); res.end(); } });
+const server = createServer(async (req, res) => { const u = req.url.split('?')[0]; const p = u === '/' ? '/index.html' : u; try { const data = await readFile(join(root, 'dist', p)); res.writeHead(200, { 'content-type': mime[p.slice(p.lastIndexOf('.'))] || 'application/octet-stream' }); res.end(data); } catch { res.writeHead(404); res.end(); } });
 await new Promise((r) => server.listen(0, r)); const port = server.address().port;
 
-const browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-background-networking', '--disable-sync', '--no-first-run', '--disable-component-update'] });
+const browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined), args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-background-networking', '--disable-sync', '--no-first-run', '--disable-component-update'] });
 const ctx = await browser.newContext(touch ? { viewport: { width: 1024, height: 700 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true } : { viewport: { width: 960, height: 540 }, deviceScaleFactor: 1 });
 const page = await ctx.newPage();
 const errors = []; page.on('pageerror', (e) => errors.push('pageerror: ' + e.message)); page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
@@ -44,7 +44,7 @@ const tap = async (a) => { await ev((a) => window.SIGNAL.press(a), a); await ste
 const hold = async (a, frames) => { await ev((a) => window.SIGNAL.press(a), a); await step(frames); await ev((a) => window.SIGNAL.release(a), a); await step(2); };
 
 const T0 = Date.now(); const lap = (m) => console.log(`[${((Date.now() - T0) / 1000).toFixed(1)}s] ${m}`);
-await page.goto(`http://localhost:${port}/`); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await frame(); lap('booted');
+await page.goto(`http://localhost:${port}/?q=high`); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await frame(); lap('booted');
 console.log('webgl:', await ev(() => window.SIGNAL.game.renderer.getContext().getParameter(0x1F02)));
 await snap('van-menu');
 // menus
@@ -66,12 +66,14 @@ await ev(() => { const c = window.SIGNAL.climber; c.pos.set(0, 0, c.tower.ladder
 st = await ev(() => ({ state: window.SIGNAL.climber.state, grip: window.SIGNAL.climber.gripping })); assert(st.state === 'ladder' && st.grip === 2, 'mounted the ladder with both hands');
 // hand-over-hand: release both hands -> fall to the ground = death when unclipped low
 let r = await climbTo(12); assert(r.done && r.y >= 12, `climbed to ${r.y?.toFixed(1)} m clipped`); await snap('climb-12m');
-st = await ev(() => ({ anchor: window.SIGNAL.climber.anchor, stamina: window.SIGNAL.climber.stamina })); assert(st.anchor !== null, 'clipped to an anchor'); console.log('stamina', st.stamina.toFixed(1));
+st = await ev(() => ({ anchor: window.SIGNAL.climber.anchor, stamina: window.SIGNAL.climber.stamina, tut: window.SIGNAL.game.tutorial.step, hint: !document.querySelector('.tut').hidden })); assert(st.anchor !== null, 'clipped to an anchor'); assert(st.tut >= 4, `tutorial follows the climb (step ${st.tut})`); console.log('stamina', st.stamina.toFixed(1));
 // clipped fall: release both hands, expect the harness to catch
 await ev(() => { const c = window.SIGNAL.climber; for (const h of c.hands) h.rung = null; }); await step(90);
 st = await ev(() => ({ state: window.SIGNAL.climber.state, falls: window.SIGNAL.climber.falls, y: window.SIGNAL.climber.pos.y, msg: window.SIGNAL.climber.message })); assert(st.state === 'ladder' && st.falls === 1, `harness caught the fall (state=${st.state}, falls=${st.falls}, y=${st.y.toFixed(1)})`); await snap('caught');
 r = await climbTo(30); assert(r.done, `reached first platform height ${r.y?.toFixed(1)}`);
 await tap('act'); st = await ev(() => ({ state: window.SIGNAL.climber.state, lp: window.SIGNAL.climber.lastPlatform })); assert(st.state === 'platform' && st.lp === 0, 'stepped onto platform 1');
+st = await ev(() => window.SIGNAL.save.checkpoint); assert(st && st.towerId === 'pinegrove' && st.platform === 0, 'checkpoint written on the platform');
+await step(60 * 7); st = await ev(() => ({ done: window.SIGNAL.save.tutorialDone, hint: !document.querySelector('.tut').hidden })); assert(st.done && !st.hint, 'tutorial finishes on the first platform');
 await ev(() => { const c = window.SIGNAL.climber; c.yaw = Math.PI; c.pitch = -0.7; }); await step(5); await snap('platform-lookdown');
 await tap('rest'); await step(40); st = await ev(() => window.SIGNAL.climber.state); assert(st === 'rest', 'rest mode'); await snap('rest-orbit'); await tap('act'); await step(3);
 await ev(() => { const c = window.SIGNAL.climber; c.yaw = 0.2; c.pitch = 0.3; }); await tap('photo'); await frame(); await frame();
@@ -85,7 +87,7 @@ await tap('act'); st = await ev(() => ({ state: window.SIGNAL.climber.state, y: 
 // repair: walk to the cabinet and hold F through the four steps
 await ev(() => { const c = window.SIGNAL.climber; const tx = c.tower.transmitter; c.pos.set(tx.x, c.pos.y, tx.z + 1.2); c.yaw = 0; c.pitch = -0.2; }); await step(3); await snap('transmitter');
 await hold('act', 60 * 14);
-st = await ev(() => ({ repaired: window.SIGNAL.climber.repaired, state: window.SIGNAL.climber.state, step: window.SIGNAL.climber.repairStep })); assert(st.repaired, `transmitter repaired (state=${st.state}, step=${st.step})`);
+st = await ev(() => ({ repaired: window.SIGNAL.climber.repaired, state: window.SIGNAL.climber.state, step: window.SIGNAL.climber.workLabel })); assert(st.repaired, `transmitter repaired (state=${st.state}, step=${st.step})`);
 await ev(() => { const c = window.SIGNAL.climber; c.yaw = -0.12; c.pitch = -0.16; c.pos.set(0, c.pos.y, -c.tower.hw(c.pos.y) - 0.6); }); await step(200); await snap('town-lights-up');
 st = await ev(() => ({ lit: window.SIGNAL.game.terrain.lit, storm: window.SIGNAL.weather.target.storm })); assert(st.lit > 0.2, `town lighting up (${st.lit.toFixed(2)})`); assert(st.storm > 0, 'storm scripted after repair');
 // descend in the rain
@@ -127,14 +129,33 @@ st = await ev(() => ({ snapped: window.SIGNAL.tower.snapped.size, msg: window.SI
 await ev(() => { window.SIGNAL.teleport(1.6); const c = window.SIGNAL.climber; c.anchor = null; for (const h of c.hands) h.rung = null; }); await step(150);
 st = await ev(() => ({ state: window.SIGNAL.climber.state, msg: window.SIGNAL.climber.message, falls: window.SIGNAL.climber.falls })); assert(st.state === 'ground', `short drop is a stumble (${st.state}, ${st.msg}, falls=${st.falls})`);
 // live junction box at 63 m: the HUD warns before the arc
-await ev(() => { window.SIGNAL.teleport(62.6); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.2; });
+await ev(() => { window.SIGNAL.teleport(62.6); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = 0.2; window.SIGNAL.sim(0.05); window.SIGNAL.clip(); }); // clipped, so a shock cannot end the probe
 let warned = false; for (let i = 0; i < 120 && !warned; i++) { await step(3); warned = await ev(() => { const S = window.SIGNAL; const p = S.tower.arcPhase(0); return p > 0.2 && p < 1 && S.climber.arcWarn > 0 && !document.querySelector('.hazard').hidden; }); }
 assert(warned, 'arc warning shows on the HUD before the box arcs'); await snap('arc-warning');
 await ev(() => { window.SIGNAL.teleport(150); const c = window.SIGNAL.climber; c.yaw = 0; c.pitch = -0.6; }); await step(30); await snap('blackridge-150m');
 st = await ev(() => window.SIGNAL.game.storyQueue?.length ?? -1); console.log('story queue', st);
+// graphics quality can be switched live; low renders without the composer
+st = await ev(() => { const S = window.SIGNAL; S.save.quality = 'low'; S.game.applySettings(); localStorage.setItem('signal.save.v1', JSON.stringify(S.save)); return true; });
+await page.goto(`http://localhost:${port}/?nothing=1`); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await frame();
+st = await ev(() => { const S = window.SIGNAL; return { level: S.game.quality.level, composer: S.game.quality.composer }; }); assert(st.level === 'low' && !st.composer, 'low quality persists and renders direct'); await snap('quality-low');
+await ev(() => { const S = window.SIGNAL; S.save.quality = 'high'; S.game.applySettings(); }); await frame(); await frame();
+st = await ev(() => window.SIGNAL.game.quality.composer); assert(st === true, 'quality switches back to the composer live');
+// resume: step onto a platform, reload, pick up from the checkpoint
+await ev(() => { const S = window.SIGNAL; S.save.loadout = ['harness', 'tools']; S.start('pinegrove'); }); await page.waitForTimeout(350);
+await ev(() => { const S = window.SIGNAL; S.game.paused = false; S.screen('none'); S.calm(); S.teleport(29.9); S.sim(0.3); S.press('act'); S.sim(0.05); S.release('act'); S.sim(0.1); });
+st = await ev(() => ({ state: window.SIGNAL.climber.state, cp: window.SIGNAL.save.checkpoint })); assert(st.state === 'platform' && st.cp && st.cp.platform === 0, 'checkpoint before reload');
+await page.reload(); await page.waitForFunction(() => window.SIGNAL && window.SIGNAL.game); await page.waitForTimeout(300); await snap('resume-offer');
+await page.getByRole('button', { name: /Resume climb|Reanudar subida/ }).click(); await page.waitForTimeout(350);
+st = await ev(() => { const S = window.SIGNAL; return { mode: S.game.mode, state: S.climber.state, y: S.climber.pos.y }; }); assert(st.mode === 'climb' && st.state === 'platform' && Math.abs(st.y - 30) < 0.5, `resumed on the platform (${st.state} at ${st.y.toFixed(1)} m)`);
+// a hidden tab pauses the climb
+await ev(() => { const S = window.SIGNAL; S.game.paused = false; S.screen('none'); Object.defineProperty(document, 'hidden', { value: true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+st = await ev(() => window.SIGNAL.game.paused); assert(st === true, 'hiding the tab pauses the climb');
+await ev(() => { Object.defineProperty(document, 'hidden', { value: false, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); window.SIGNAL.game.endClimb(false); });
+st = await ev(() => window.SIGNAL.save.checkpoint); assert(st === null, 'abandoning clears the checkpoint');
 const perf = await ev(async () => { const t0 = performance.now(); let f = 0; await new Promise((res) => { const s = () => { f++; if (performance.now() - t0 > 2000) res(); else requestAnimationFrame(s); }; requestAnimationFrame(s); }); return { fps: Math.round(f / 2) }; }); console.log('perf (swiftshader):', JSON.stringify(perf));
 if (touch) {
-  await ev(() => { window.SIGNAL.calm(); window.SIGNAL.teleport(20); }); await step(5); await snap('touch-controls');
+  await ev(() => { window.SIGNAL.save.loadout = ['harness', 'tools']; window.SIGNAL.start('blackridge'); }); await page.waitForTimeout(350);
+  await ev(() => { const S = window.SIGNAL; S.game.paused = false; S.screen('none'); S.calm(); S.teleport(20); }); await step(5); await snap('touch-controls');
   // auto-reach: with ▲ the grabs go up even while looking down, with ▼ they go down while looking up
   let y0 = await ev(() => { const c = window.SIGNAL.climber; c.reachDir = 1; c.anchor = null; return c.pos.y; });
   for (let i = 0; i < 8; i++) await ev(() => { window.SIGNAL.cycle(1, false); window.SIGNAL.sim(0.15); }); // pitch down, reach mode up

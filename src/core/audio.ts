@@ -47,6 +47,9 @@ export class Audio {
     const rs = this.loop(this.white); const rsf = c.createBiquadFilter(); rsf.type = 'bandpass'; rsf.frequency.value = 1800; rsf.Q.value = 1.2; this.radioStaticGain = c.createGain(); this.radioStaticGain.gain.value = 0; rs.connect(rsf).connect(this.radioStaticGain).connect(this.master);
     this.musicGain = c.createGain(); this.musicGain.gain.value = 0; this.musicGain.connect(this.master);
   }
+  /** Silence everything while the page is hidden. */
+  suspend() { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {}); }
+  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}); }
   private loop(buf: AudioBuffer) { const s = this.ctx!.createBufferSource(); s.buffer = buf; s.loop = true; s.start(); return s; }
   setEnabled(on: boolean) { this.enabled = on; if (this.master) this.master.gain.setTargetAtTime(on ? 0.8 : 0, this.ctx!.currentTime, 0.1); }
 

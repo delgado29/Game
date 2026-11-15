@@ -38,6 +38,32 @@ const D: Dict = {
   clickToPlay: ['Click to take the controls', 'Haz clic para tomar los controles'],
   controls: ['Mouse: look · WASD: walk · Hold LMB/RMB (or Q/E): left/right hand · Space: clip · F: use · V: rest · C: photo · Esc: menu', 'Ratón: mirar · WASD: andar · Mantén clic izq/der (o Q/E): mano izq/der · Espacio: anclar · F: usar · V: descansar · C: foto · Esc: menú'],
   quit: ['Abandon climb', 'Abandonar'], resume: ['Resume', 'Seguir'], paused: ['Paused', 'Pausa'],
+  // radio
+  whoDispatch: ['DISPATCH', 'CENTRAL'], whoYou: ['YOU', 'TÚ'], whoUnknown: ['?????', '?????'],
+  // settings
+  quality: ['Graphics quality', 'Calidad gráfica'], qAuto: ['Auto', 'Auto'], qLow: ['Low', 'Baja'], qMedium: ['Medium', 'Media'], qHigh: ['High', 'Alta'],
+  gripMode: ['Grip control', 'Control de agarre'], gripHold: ['Hold to grip', 'Mantener para agarrar'], gripTap: ['Tap to move a hand', 'Tocar para mover la mano'],
+  // resume
+  resumeClimb: ['Resume climb', 'Reanudar subida'], platformAt: ['platform at', 'plataforma a'],
+  // protection
+  arrester: ['CABLE GRAB', 'ANTICAÍDAS'], noCable: ['NO CABLE — cable grab useless here', 'SIN CABLE — el anticaídas no sirve aquí'], arresterOn: ['The cable grab rides with you', 'El anticaídas te sigue por el cable'],
+  ice: ['Ice on the rungs', 'Hielo en los peldaños'],
+  // work points
+  wPage: ['Read the logbook page', 'Leer la página de bitácora'], wFragment: ['Capture the signal fragment', 'Capturar el fragmento de señal'], wInspect: ['Inspect', 'Inspeccionar'],
+  needAnalyzer: ['A stray signal here. You need the analyzer.', 'Aquí hay una señal extraña. Necesitas el analizador.'],
+  missingGear: ['Missing required gear', 'Falta equipo necesario'],
+  // tutorial (keyboard / touch variants)
+  tutWalkK: ['Walk to the foot of the ladder: WASD, mouse to look', 'Camina hasta el pie de la escalera: WASD, ratón para mirar'],
+  tutWalkT: ['Walk to the foot of the ladder with the left stick. Drag to look.', 'Camina hasta el pie de la escalera con el joystick. Arrastra para mirar.'],
+  tutHoldK: ['Hold both mouse buttons: each one is a hand on a rung', 'Mantén los dos botones del ratón: cada uno es una mano en un peldaño'],
+  tutHoldT: ['Hold L and R: each one is a hand on a rung', 'Mantén I y D: cada uno es una mano en un peldaño'],
+  tutMoveK: ['Let go with one hand, look up, grab again. Then the other hand.', 'Suelta una mano, mira arriba y vuelve a agarrar. Luego la otra.'],
+  tutMoveT: ['Let go of one button and press it again: that hand grabs higher. Alternate.', 'Suelta un botón y vuelve a pulsarlo: esa mano agarra más arriba. Alterna.'],
+  tutTap: ['Tap a grip to move that hand up. Alternate hands.', 'Toca un agarre para subir esa mano. Alterna las manos.'],
+  tutClipK: ['Clip your lanyard to the yellow cable: Space', 'Ancla tu cabo al cable amarillo: Espacio'],
+  tutClipT: ['Clip your lanyard to the yellow cable: CLIP', 'Ancla tu cabo al cable amarillo: ANCLA'],
+  tutRhythm: ['Climb until the lanyard goes taut, then clip the next anchor', 'Sube hasta que el cabo se tense y ancla en el siguiente punto'],
+  tutPlatform: ['Platforms are safe: they restore stamina and save your progress', 'Las plataformas son seguras: recuperan aguante y guardan tu progreso'],
 };
 
 let lang: Lang = 'en';

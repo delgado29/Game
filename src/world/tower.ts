@@ -9,6 +9,8 @@ const ARC_CYCLE = 5.5, ARC_ON = 1.0, ARC_WARN = 1.3; // junction boxes: warn for
 const UP = new THREE.Vector3(0, 1, 0);
 
 export interface Platform { y: number; hw: number; }
+/** Something on a platform the climber can work on: a logbook page, a signal fragment, an inspection tag. */
+export interface WorkPoint { id: string; kind: 'page' | 'fragment' | 'inspect'; platform: number; pos: THREE.Vector3; mesh: THREE.Group; done: boolean; }
 
 /** Procedural lattice tower with a ladder, safety cable, platforms, hazards and the transmitter. */
 export class Tower {
@@ -25,6 +27,7 @@ export class Tower {
   private rungMesh: THREE.InstancedMesh; private brokenMesh: THREE.InstancedMesh;
   private hazardMarks: THREE.InstancedMesh;
   repaired = false;
+  points: WorkPoint[] = [];
   private time = 0;
 
   constructor(public spec: TowerSpec) {
@@ -117,6 +120,34 @@ export class Tower {
   hw(y: number) { const t = clamp(y / this.spec.height, 0, 1); return (this.spec.baseWidth + (this.spec.topWidth - this.spec.baseWidth) * Math.pow(t, 0.85)) / 2; }
   ladderZ(y: number) { return this.hw(y) + LADDER_OFF; }
   showHazards(v: boolean) { this.hazardMarks.visible = v; }
+  /** Is the safety cable intact at this height? */
+  cableAt(y: number) { return y > 0 && y < this.spec.height && !this.spec.cutAnchors.some(([a, b]) => y > a && y < b); }
+  iceAt(y: number) { return this.spec.iceAbove !== undefined && y > this.spec.iceAbove; }
+  /** Adds a work point at a platform corner (0..3, counter-clockwise from +x,+z). */
+  addPoint(id: string, kind: WorkPoint['kind'], platform: number, corner: number): WorkPoint {
+    const p = this.platforms[Math.min(platform, this.platforms.length - 1)]; const sx = [1, 1, -1, -1][corner % 4], sz = [1, -1, -1, 1][corner % 4];
+    const pos = new THREE.Vector3(sx * (p.hw + 0.5), p.y, sz * (p.hw + 0.5));
+    const mesh = new THREE.Group(); mesh.position.set(sx * (p.hw + 1.02), p.y + 0.85, sz * (p.hw + 1.02)); mesh.rotation.y = Math.atan2(sx, sz);
+    if (kind === 'page') {
+      const board = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.32, 0.02), new THREE.MeshStandardMaterial({ color: 0x6b4a2a, roughness: 0.8 })); mesh.add(board);
+      const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.26), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.5, 1.4, 1.1) })); paper.position.z = -0.012; paper.rotation.y = Math.PI; mesh.add(paper);
+    } else if (kind === 'fragment') {
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.12), new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.5, metalness: 0.6 })); mesh.add(box);
+      const led = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 3.0, 4.0) })); led.position.set(0.06, 0.05, -0.07); led.name = 'led'; mesh.add(led);
+      const whip = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.5, 5), new THREE.MeshStandardMaterial({ color: 0x111111 })); whip.position.set(-0.07, 0.3, 0); mesh.add(whip);
+    } else {
+      const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.2), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.7, 0.2), side: THREE.DoubleSide })); mesh.add(tag);
+    }
+    this.group.add(mesh);
+    const pt: WorkPoint = { id, kind, platform: Math.min(platform, this.platforms.length - 1), pos, mesh, done: false }; this.points.push(pt); return pt;
+  }
+  completePoint(pt: WorkPoint) { pt.done = true; pt.mesh.visible = pt.kind === 'inspect'; if (pt.kind === 'inspect') pt.mesh.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined; if (m?.color) m.color.setRGB(0.3, 2.4, 0.6); }); }
+  /** Closest unfinished point on a platform within `r` metres of `pos`. */
+  nearestPoint(pos: THREE.Vector3, platform: number, r: number): WorkPoint | null {
+    let best: WorkPoint | null = null, bd = r;
+    for (const pt of this.points) { if (pt.done || pt.platform !== platform) continue; const d = Math.hypot(pt.pos.x - pos.x, pt.pos.z - pos.z); if (d < bd) { bd = d; best = pt; } }
+    return best;
+  }
   /** Nearest rung index to a height. */
   rungAt(y: number) { return clamp(Math.round(y / RUNG_STEP) - 1, 0, this.rungY.length - 1); }
   snapRung(i: number) { this.snapped.add(i); this.brokenMesh.setMatrixAt([...this.broken].indexOf(i), new THREE.Matrix4().makeScale(0, 0, 0)); this.brokenMesh.instanceMatrix.needsUpdate = true; }
@@ -124,12 +155,13 @@ export class Tower {
   arcAt(i: number) { return this.arcPhase(i) >= 1 ? 1 : 0; }
   /** 0 idle, rising 0..1 during the warning buzz, 1 while arcing. */
   arcPhase(i: number) { const e = this.electrical[i]; const t = (this.time + e.phase) % ARC_CYCLE; if (t < ARC_ON) return 1; const w = t - (ARC_CYCLE - ARC_WARN); return w > 0 ? Math.min(0.999, w / ARC_WARN) : 0; }
-  setRepaired() { this.repaired = true; (this.statusLamp.material as THREE.MeshBasicMaterial).color.set(0x30ff60); }
+  setRepaired(v = true) { this.repaired = v; }
   update(dt: number) {
     this.time += dt;
     const blink = this.repaired ? (Math.sin(this.time * 2) > 0 ? 1 : 0.2) : Math.sin(this.time * 1.5) > 0.6 ? 1 : 0;
     (this.beacon.material as THREE.MeshBasicMaterial).color.setRGB(1, 0.15 * blink, 0.1 * blink).multiplyScalar(0.4 + 0.6 * blink); this.beaconLight.intensity = blink * 40;
     (this.statusLamp.material as THREE.MeshBasicMaterial).color.copy(this.repaired ? new THREE.Color(0x30ff60) : new THREE.Color(Math.sin(this.time * 6) > 0 ? 0xff2020 : 0x300000));
+    for (const pt of this.points) { if (pt.done) continue; if (pt.kind === 'fragment') { const led = pt.mesh.getObjectByName('led'); if (led) led.visible = Math.sin(this.time * 6 + pt.pos.x) > 0; } else if (pt.kind === 'page') pt.mesh.rotation.z = Math.sin(this.time * 1.7 + pt.pos.z) * 0.08; }
     this.electrical.forEach((e, i) => { const p = this.arcPhase(i); const arcing = p >= 1; const f = arcing ? (Math.random() > 0.35 ? 1 : 0.2) : p > 0 ? p * (Math.random() > 0.6 ? 0.35 : 0.05) : 0; e.light.intensity = f * 6; e.arc.visible = arcing && f > 0.5;
       (e.sign.material as THREE.MeshBasicMaterial).color.set(p > 0 && !arcing && Math.sin(this.time * 40) > 0 ? 0xfff2a0 : arcing ? 0xff4040 : 0xffd400); });
   }
